@@ -6,8 +6,7 @@
 **/*fdb_latexmk
 *.bbl
 *.blg
-./python/virtualenv/**/*
-**/virtualenv/
+python/virtualenv/
 **/__pycache__
 **/*populate*.py
 /paper/neuro-cadical-neurips.pdf
@@ -16,4 +15,10 @@
 /paper/clean.sh
 /250000
 /Pipfile
-/data/results/
+data/
+satenv/
+cgen/
+cadical/
+torchscript/
+.idea/
+.vscode/
