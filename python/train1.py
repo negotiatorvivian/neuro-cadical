@@ -34,7 +34,7 @@ def compute_softmax_kldiv_loss(logitss, probss):
         # print(logits.size())
         logits = F.log_softmax(logits, dim = 0)  # must be log-probabilities
         cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]),
-                      reduction = "sum")
+            reduction = "sum")
         # print("CL", cl)
         result += cl  # result += F.kl_div(logits, probs, reduction="none")
     result = result / float(len(probss))
@@ -184,7 +184,7 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
             num_g_nonzero_entries = torch.nonzero(g).size(0)
             if not num_g_entries == num_g_nonzero_entries:
                 print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g,
-                      "AHHHHHHHH")
+                    "AHHHHHHHH")
         except AttributeError:
             pass
 
@@ -291,8 +291,10 @@ class Trainer:
                 pass
 
     def save_model(self, model, optimizer, ckpt_path):  # TODO(jesse): implement a CheckpointManager
-        torch.save({"model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
-            "save_counter": self.save_counter, "GLOBAL_STEP_COUNT": self.GLOBAL_STEP_COUNT}, ckpt_path)
+        torch.save({
+            "model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
+            "save_counter": self.save_counter, "GLOBAL_STEP_COUNT": self.GLOBAL_STEP_COUNT
+        }, ckpt_path)
 
     def load_model(self, model, optimizer, ckpt_path):
         """
@@ -372,10 +374,8 @@ class Trainer:
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             for nmsdps in self.dataset:
                 drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
-                                                                                              self.optimizer, nmsdps,
-                                                                                              device = self.device,
-                                                                                              CUDA_FLAG = self.CUDA_FLAG,
-                                                                                              use_NMSDP_to_sparse2 = True)
+                    self.optimizer, nmsdps, device = self.device, CUDA_FLAG = self.CUDA_FLAG,
+                    use_NMSDP_to_sparse2 = True)
 
                 self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                 self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -393,16 +393,16 @@ class Trainer:
             self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT, force_save = True)  # save at the end of every epoch regardless
 
 
-def gen_nmsdp_batch(k):
-    nmsdps = []
-    D = RandKCNFDataset(3, 40)
-    D_gen = D.__iter__()
-    for _ in range(k):
-        cnf = next(D_gen)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            nmsdp = gen_nmsdp(tmpdir, cnf, is_train = True, logger = DummyLogger())
-        nmsdps.append(nmsdp)
-    return nmsdps
+# def gen_nmsdp_batch(k):
+#     nmsdps = []
+#     D = RandKCNFDataset(3, 40)
+#     D_gen = D.__iter__()
+#     for _ in range(k):
+#         cnf = next(D_gen)
+#         with tempfile.TemporaryDirectory() as tmpdir:
+#             nmsdp = gen_nmsdp(tmpdir, cnf, is_train = True, logger = DummyLogger())
+#         nmsdps.append(nmsdp)
+#     return nmsdps
 
 
 def _parse_main():
@@ -437,7 +437,7 @@ def _main_train1(cfg = None, opts = None):
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
     trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = True,
-                      n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
+        n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
         while True:
@@ -446,15 +446,19 @@ def _main_train1(cfg = None, opts = None):
         trainer.train()
 
 
-def _test_trainer():
+def _test_trainer(opts = None):
+    if opts is None:
+        opts = _parse_main()
     model = GNN1(**defaultGNN1Cfg)
     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
     trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
-                      n_steps = opts.n_steps)
+        n_steps = opts.n_steps)
     for _ in range(5):
         trainer.train()  # trainer.load_latest_ckpt()
 
 
-GNN1Cfg0 = {"clause_dim": 64, "lit_dim": 16, "n_hops": 1, "n_layers_C_update": 0, "n_layers_L_update": 0,
-    "n_layers_score": 1, "activation": "leaky_relu"}
+GNN1Cfg0 = {
+    "clause_dim": 64, "lit_dim": 16, "n_hops": 1, "n_layers_C_update": 0, "n_layers_L_update": 0, "n_layers_score": 1,
+    "activation": "leaky_relu"
+}
