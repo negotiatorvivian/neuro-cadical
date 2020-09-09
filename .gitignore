@@ -6,7 +6,6 @@
 **/*fdb_latexmk
 *.bbl
 *.blg
-./python/virtualenv/**/*
 **/virtualenv/
 **/__pycache__
 **/*populate*.py
@@ -16,4 +15,12 @@
 /paper/clean.sh
 /250000
 /Pipfile
-/data/results/
+data/
+cgen/
+cadical/**/*
+satenv/
+torchscript/
+python/requirements.txt
+.idea/
+.vscode/
+
