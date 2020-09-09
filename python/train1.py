@@ -9,11 +9,11 @@ import datetime
 import time
 import torch.multiprocessing as mp
 
-from util import check_make_path, files_with_extension
-from gnn import *
-from batch import Batcher
-from data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
-from gen_data import NMSDP
+from python.util import check_make_path, files_with_extension
+from python.gnn import *
+from python.batch import Batcher
+from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
+from python.gen_data import NMSDP
 
 
 def compute_softmax_kldiv_loss(logitss, probss):
@@ -33,10 +33,10 @@ def compute_softmax_kldiv_loss(logitss, probss):
         # print("PROBS", probs)
         # print(logits.size())
         logits = F.log_softmax(logits, dim = 0)  # must be log-probabilities
-        cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]), reduction = "sum")
+        cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]),
+            reduction = "sum")
         # print("CL", cl)
-        result += cl
-        # result += F.kl_div(logits, probs, reduction="none")
+        result += cl  # result += F.kl_div(logits, probs, reduction="none")
     result = result / float(len(probss))
     return result
 
@@ -83,7 +83,8 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
     return torch.sparse.FloatTensor(indices = indices, values = values, size = size)
 
 
-def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMSDP_to_sparse2 = False, use_glue_counts = False):
+def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
+               use_glue_counts = False):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly,
     # because DataLoader does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
@@ -105,9 +106,12 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
             if not use_NMSDP_to_sparse2:
                 Gs.append(maybe_non_blocking(NMSDP_to_sparse(nmsdp)))
                 var_lemma_countss.append(
-                    maybe_non_blocking(torch.from_numpy(nmsdp.var_lemma_counts).type(torch.float32).squeeze()).to(device))
-                core_var_masks.append(maybe_non_blocking(torch.from_numpy(nmsdp.core_var_mask).type(torch.bool).squeeze()).to(device))
-                core_clause_masks.append(maybe_non_blocking(torch.from_numpy(nmsdp.core_clause_mask).type(torch.bool).squeeze()).to(device))
+                    maybe_non_blocking(torch.from_numpy(nmsdp.var_lemma_counts).type(torch.float32).squeeze()).to(
+                        device))
+                core_var_masks.append(
+                    maybe_non_blocking(torch.from_numpy(nmsdp.core_var_mask).type(torch.bool).squeeze()).to(device))
+                core_clause_masks.append(
+                    maybe_non_blocking(torch.from_numpy(nmsdp.core_clause_mask).type(torch.bool).squeeze()).to(device))
             else:
                 Gs.append(maybe_non_blocking(NMSDP_to_sparse2(nmsdp)))
                 var_lemma_countss.append(maybe_non_blocking(nmsdp.var_lemma_counts.type(torch.float32)[0]).to(device))
@@ -116,7 +120,8 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
         else:
             if not use_NMSDP_to_sparse2:
                 Gs.append(maybe_non_blocking(NMSDP_to_sparse(nmsdp)))
-                glue_countss.append(maybe_non_blocking(torch.from_numpy(nmsdp.glue_counts).type(torch.float32).squeeze()).to(device))
+                glue_countss.append(
+                    maybe_non_blocking(torch.from_numpy(nmsdp.glue_counts).type(torch.float32).squeeze()).to(device))
             else:
                 Gs.append(maybe_non_blocking(NMSDP_to_sparse2(nmsdp)))
                 glue_countss.append(maybe_non_blocking(nmsdp.glue_counts.type(torch.float32)[0]).to(device))
@@ -179,7 +184,8 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
             num_g_entries = torch.prod(torch.tensor(list(g.size())), 0)
             num_g_nonzero_entries = torch.nonzero(g).size(0)
             if not num_g_entries == num_g_nonzero_entries:
-                print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g, "AHHHHHHHH")
+                print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g,
+                    "AHHHHHHHH")
         except AttributeError:
             pass
 
@@ -207,13 +213,16 @@ def train_step2(model, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMS
         if not use_NMSDP_to_sparse2:
             G = NMSDP_to_sparse(nmsdp)
             Gs.append(maybe_non_blocking(G))
-            core_var_masks.append(maybe_non_blocking(torch.from_numpy(nmsdp.core_var_mask).type(torch.bool).squeeze()).to(device))
-            var_lemma_countss.append(maybe_non_blocking(torch.from_numpy(nmsdp.var_lemma_counts).type(torch.float32).squeeze()).to(device))
+            core_var_masks.append(
+                maybe_non_blocking(torch.from_numpy(nmsdp.core_var_mask).type(torch.bool).squeeze()).to(device))
+            var_lemma_countss.append(
+                maybe_non_blocking(torch.from_numpy(nmsdp.var_lemma_counts).type(torch.float32).squeeze()).to(device))
         else:
             G = NMSDP_to_sparse2(nmsdp)
             Gs.append(maybe_non_blocking(G))
             core_var_masks.append(maybe_non_blocking(nmsdp.core_var_mask.type(torch.bool).squeeze()).to(device))
-            var_lemma_countss.append(maybe_non_blocking(nmsdp.var_lemma_counts.type(torch.float32).squeeze()).to(device))
+            var_lemma_countss.append(
+                maybe_non_blocking(nmsdp.var_lemma_counts.type(torch.float32).squeeze()).to(device))
 
     V_drat_logitss, V_core_logitss = model(Gs)
 
@@ -257,7 +266,8 @@ class Trainer:
     The `logger` attribute is a TrainLogger object, responsible for writing to training logs _and_ TensorBoard summaries.
     """
 
-    def __init__(self, model, dataset, lr, ckpt_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1, index = 0):
+    def __init__(self, model, dataset, lr, ckpt_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
+                 index = 0):
         self.model = model
         self.dataset = dataset
         self.ckpt_dir = ckpt_dir
@@ -282,12 +292,8 @@ class Trainer:
                 pass
 
     def save_model(self, model, optimizer, ckpt_path):  # TODO(jesse): implement a CheckpointManager
-        torch.save({
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "save_counter": self.save_counter,
-            "GLOBAL_STEP_COUNT": self.GLOBAL_STEP_COUNT
-        }, ckpt_path)
+        torch.save({"model_state_dict": model.state_dict(), "optimizer_state_dict": optimizer.state_dict(),
+                    "save_counter": self.save_counter, "GLOBAL_STEP_COUNT": self.GLOBAL_STEP_COUNT}, ckpt_path)
 
     def load_model(self, model, optimizer, ckpt_path):
         """
@@ -366,8 +372,11 @@ class Trainer:
         for epoch_count in range(self.n_epochs):
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             for nmsdps in self.dataset:
-                drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher, self.optimizer, nmsdps,
-                    device = self.device, CUDA_FLAG = self.CUDA_FLAG, use_NMSDP_to_sparse2 = True)
+                drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
+                    self.optimizer, nmsdps,
+                    device = self.device,
+                    CUDA_FLAG = self.CUDA_FLAG,
+                    use_NMSDP_to_sparse2 = True)
 
                 self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                 self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -428,8 +437,8 @@ def _main_train1(cfg = None, opts = None):
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
-    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = True, n_steps = opts.n_steps,
-        n_epochs = opts.n_epochs, index = opts.index)
+    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = True,
+        n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
         while True:
@@ -442,18 +451,11 @@ def _test_trainer():
     model = GNN1(**defaultGNN1Cfg)
     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
-    trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True, n_steps = opts.n_steps)
+    trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
+        n_steps = opts.n_steps)
     for _ in range(5):
-        trainer.train()
-        # trainer.load_latest_ckpt()
+        trainer.train()  # trainer.load_latest_ckpt()
 
 
-GNN1Cfg0 = {
-    "clause_dim": 64,
-    "lit_dim": 16,
-    "n_hops": 1,
-    "n_layers_C_update": 0,
-    "n_layers_L_update": 0,
-    "n_layers_score": 1,
-    "activation": "leaky_relu"
-}
+GNN1Cfg0 = {"clause_dim": 64, "lit_dim": 16, "n_hops": 1, "n_layers_C_update": 0, "n_layers_L_update": 0,
+            "n_layers_score": 1, "activation": "leaky_relu"}
