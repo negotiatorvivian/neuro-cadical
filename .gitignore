@@ -18,6 +18,7 @@
 data/
 cgen/
 cadical/**/*
+cadical-origin/
 satenv/
 torchscript/
 python/requirements.txt
