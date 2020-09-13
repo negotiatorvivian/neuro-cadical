@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 import tempfile
 import json
 import datetime
+import multiprocessing
 import time
 import torch.multiprocessing as mp
 
@@ -83,7 +84,7 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
     return torch.sparse.FloatTensor(indices = indices, values = values, size = size)
 
 
-def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
+def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
         use_glue_counts = False):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
@@ -196,7 +197,7 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
     return drat_loss, core_loss, core_clause_loss, loss, x, l2_loss
 
 
-def train_step2(model, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMSDP_to_sparse2 = False):
+def train_step2(model, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False):
     optim.zero_grad()
     Gs = []
     core_var_masks = []
@@ -414,7 +415,7 @@ def _parse_main():
     parser.add_argument("--batch-size", type = int, dest = "batch_size", action = "store")
     parser.add_argument("--n-data-workers", type = int, dest = "n_data_workers", action = "store")
     parser.add_argument("--ckpt-dir", type = str, dest = "ckpt_dir", action = "store")
-    parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store")
+    parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store", default = 10)
     parser.add_argument("--n-steps", type = int, dest = "n_steps", action = "store", default = -1)
     parser.add_argument("--n-epochs", type = int, dest = "n_epochs", action = "store", default = -1)
     parser.add_argument("--forever", action = "store_true")
@@ -427,6 +428,7 @@ def _parse_main():
 def _main_train1(cfg = None, opts = None):
     if opts is None:
         opts = _parse_main()
+        opts.n_data_workers = opts.n_data_workers if opts.n_data_workers else multiprocessing.cpu_count()
 
     if cfg is None:
         # cfg = defaultGNN1Cfg
@@ -436,7 +438,7 @@ def _main_train1(cfg = None, opts = None):
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
-    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = True,
+    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
         n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
@@ -462,3 +464,6 @@ GNN1Cfg0 = {
     "clause_dim": 64, "lit_dim": 16, "n_hops": 1, "n_layers_C_update": 0, "n_layers_L_update": 0, "n_layers_score": 1,
     "activation": "leaky_relu"
 }
+
+if __name__ == "__main__":
+    _main_train1()

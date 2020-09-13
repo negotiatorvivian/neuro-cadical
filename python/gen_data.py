@@ -146,6 +146,7 @@ def lbdcdl(cnf_dir,
         cadical_command += [f"--clauselim={int(clause_limit)}"]
     cadical_command += [f"--seed={int(np.random.choice(int(10e5)))}"]
     cadical_command += [cnf_path]
+    print(cadical_command)
 
     subprocess.run(cadical_command, stdout=subprocess.PIPE)
 

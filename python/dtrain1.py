@@ -10,6 +10,7 @@ import torch.utils.data as td
 from batch import Batcher
 import json
 from os import path
+import multiprocessing
 import ray
 from ray.util.sgd.torch.training_operator import TrainingOperator
 
@@ -250,6 +251,8 @@ def _main():
     n_data_workers = cfg.pop("n_data_workers")
     num_epochs = cfg.pop("num_epochs")
     batch_size = cfg.pop("batch_size")
+    n_data_workers = n_data_workers if n_data_workers else multiprocessing.cpu_count()
+
     return parallel_train1(num_replicas, batch_size, cfg, n_data_workers, num_epochs)
 
 
