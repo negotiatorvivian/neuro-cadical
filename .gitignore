@@ -6,6 +6,7 @@
 **/*fdb_latexmk
 *.bbl
 *.blg
+**/virtualenv3.8/
 **/virtualenv/
 **/__pycache__
 **/*populate*.py
@@ -19,9 +20,10 @@ data/**/*
 cgen/
 cadical/**/*
 cadical-neuro
-satenv/
+satenv/**/*
 torchscript/
 python/requirements.txt
 .idea/
 .vscode/
-
+.DS_Store
+**/*/.DS_Store

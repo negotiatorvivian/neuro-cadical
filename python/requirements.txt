@@ -1,7 +1,7 @@
 torch
 numpy
 cnfgen
-https://s3-us-west-2.amazonaws.com/ray-wheels/latest/ray-0.9.0.dev0-cp37-cp37m-macosx_10_13_intel.whl
+https://s3-us-west-2.amazonaws.com/ray-wheels/latest/ray-0.9.0.dev0-cp38-cp38-macosx_10_13_x86_64.whl
 h5py
 tensorflow>=2.1
 tensorboard

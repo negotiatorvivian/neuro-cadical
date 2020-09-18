@@ -27,7 +27,7 @@ from config import *
 
 def lemma_occ(tsr):
     n_vars = tsr.shape[0]
-    result = np.zeros(shape=[n_vars])
+    result = np.zeros(shape = [n_vars])
     for idx in range(n_vars):
         result[idx] = np.sum(tsr[idx, 0, :])
     return result
@@ -35,13 +35,13 @@ def lemma_occ(tsr):
 
 def del_occ(tsr):
     n_vars = tsr.shape[0]
-    result = np.zeros(shape=[n_vars])
+    result = np.zeros(shape = [n_vars])
     for idx in range(n_vars):
         result[idx] = np.sum(tsr[idx, 1, :])
     return result
 
 
-class CNFDataset:
+class CNFDataset(td.IterableDataset):
     def __init__(self):
         raise Exception("abstract method")
 
@@ -60,18 +60,30 @@ class CNFDataset:
 
 
 class CNFDirDataset(CNFDataset):
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, batch_size):
         self.data_dir = data_dir
         self.files = util.files_with_extension(self.data_dir, "cnf")
         self.file_index = 0
+        self.batch_size = batch_size
+
+    def __len__(self):
+        return len(self.files)
+
+    def __iter__(self):
+        if self.batch_size is None:
+            return super().__iter__()
+        else:
+            length = min(self.batch_size, self.__len__())
+            return batch_iterator(super().__iter__(), length)
 
     def gen_formula(self):
         try:
-            cnf = CNF(from_file=self.files[self.file_index])
+            cnf = CNF(from_file = self.files[self.file_index])
         except IndexError:
             raise StopIteration
         self.file_index += 1
-        return cnf
+        td = tempfile.TemporaryDirectory()
+        return gen_lbdp(td, cnf)
 
 
 class Logger:
@@ -87,18 +99,18 @@ class SimpleLogger(Logger):
         self.logfile = logfile
         util.check_make_path(logfile)
 
-    def write(self, *args, verbose=True):
+    def write(self, *args, verbose = True):
         with open(self.logfile, "a") as f:
             if verbose:
                 print(f"({datetime.datetime.now()}):", *args)
-            print(f"({datetime.datetime.now()}):", *args, file=f)
+            print(f"({datetime.datetime.now()}):", *args, file = f)
 
 
 class DummyLogger(Logger):
-    def __init__(self, verbose=False):
+    def __init__(self, verbose = False):
         self.verbose = verbose
 
-    def write(self, *args, verbose=True, **kwargs):
+    def write(self, *args, verbose = True, **kwargs):
         if self.verbose and verbose:
             print(*args)
 
@@ -118,22 +130,16 @@ def coo(fmla):
 
             C_result.append(cls_idx)
             L_result.append(lit_enc)
-    return np.array(C_result, dtype="int32"), np.array(L_result, dtype="int32")
+    return np.array(C_result, dtype = "int32"), np.array(L_result, dtype = "int32")
 
 
-def lbdcdl(cnf_dir,
-           cnf,
-           llpath,
-           dump_dir=None,
-           dumpfreq=50e3,
-           timeout=None,
-           clause_limit=1e6):
+def lbdcdl(cnf_dir, cnf, llpath, dump_dir = None, dumpfreq = 50e3, timeout = None, clause_limit = 1e6):
     """
   Args: CNF object, optional timeout and dump flags
   Returns: nothing
   """
     cnf_path = os.path.join(cnf_dir, str(uuid.uuid4()) + ".cnf.gz")
-    cnf.to_file(cnf_path, compress_with="gzip")
+    cnf.to_file(cnf_path, compress_with = "gzip")
     cadical_command = [CADICAL_PATH]
     cadical_command += ["-ll", llpath]
     if dump_dir is not None:
@@ -148,17 +154,11 @@ def lbdcdl(cnf_dir,
     cadical_command += [cnf_path]
     print(cadical_command)
 
-    subprocess.run(cadical_command, stdout=subprocess.PIPE)
+    subprocess.run(cadical_command, stdout = subprocess.PIPE)
 
 
-def gen_lbdp(td,
-             cnf,
-             is_train=True,
-             logger=DummyLogger(verbose=True),
-             dump_dir=None,
-             dumpfreq=50e3,
-             timeout=None,
-             clause_limit=1e6):
+def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dump_dir = None, dumpfreq = 50e3,
+        timeout = None, clause_limit = 1e6):
     clause_limit = int(clause_limit)
     fmla = cnf
     counts = np.zeros(fmla.nv)
@@ -167,13 +167,8 @@ def gen_lbdp(td,
     name = str(uuid.uuid4())
     with td as td:
         llpath = os.path.join(td, name + ".json")
-        lbdcdl(td,
-               fmla,
-               llpath,
-               dump_dir=dump_dir,
-               dumpfreq=dumpfreq,
-               timeout=timeout,
-               clause_limit=clause_limit)
+        lbdcdl(td, fmla, llpath, dump_dir = dump_dir, dumpfreq = dumpfreq, timeout = timeout,
+            clause_limit = clause_limit)
         with open(llpath, "r") as f:
             for idx, line in enumerate(f):
                 counts[idx] = int(line.split()[1])
@@ -181,23 +176,15 @@ def gen_lbdp(td,
     C_idxs, L_idxs = coo(fmla)
     n_clauses = len(fmla.clauses)
 
-    lbdp = LBDP(dp_id=name,
-                is_train=np.array([is_train], dtype="bool"),
-                n_vars=np.array([n_vars], dtype="int32"),
-                n_clauses=np.array([n_clauses], dtype="int32"),
-                C_idxs=np.array(C_idxs),
-                L_idxs=np.array(L_idxs),
-                glue_counts=counts)
+    lbdp = LBDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
+        n_vars = np.array([n_vars], dtype = "int32"), n_clauses = np.array([n_clauses], dtype = "int32"),
+        C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), glue_counts = counts)
 
     return lbdp
 
 
 class CNFProcessor:
-    def __init__(self,
-                 cnfdataset,
-                 tmpdir=None,
-                 use_glue_counts=False,
-                 timeout=None):
+    def __init__(self, cnfdataset, tmpdir = None, use_glue_counts = True, timeout = None):
         if tmpdir is None:
             self.tmpdir = tempfile.TemporaryDirectory()
         else:
@@ -211,7 +198,7 @@ class CNFProcessor:
             if not self.use_glue_counts:
                 nmsdp = gen_nmsdp(self.tmpdir, cnf)
             else:
-                nmsdp = gen_lbdp(self.tmpdir, cnf, timeout=self.timeout)
+                nmsdp = gen_lbdp(self.tmpdir, cnf, timeout = self.timeout)
                 if np.sum(nmsdp.glue_counts) <= 50:
                     continue
             self.tmpdir = tempfile.TemporaryDirectory()
@@ -227,3 +214,9 @@ class CNFProcessor:
 
     def __del__(self):
         self.clean()
+
+
+def mk_CNFDataloader(data_dir, batch_size, num_workers):
+    cnf_dataset = CNFDirDataset(data_dir, batch_size)
+    return td.DataLoader(cnf_dataset, batch_size = 1, num_workers = num_workers, worker_init_fn = h5_worker_init_fn,
+        pin_memory = True)

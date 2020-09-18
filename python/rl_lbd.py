@@ -13,6 +13,8 @@ import ray
 from ray.util import ActorPool
 import random
 import queue
+import tempfile
+from uuid import uuid4
 
 from satenv import SatEnv
 from gnn import defaultGNN1Cfg
@@ -138,7 +140,7 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
     def set_env(self, from_cnf = None, from_file = None):
         if from_cnf is not None:
             self.td = tempfile.TemporaryDirectory()
-            cnf_path = os.path.join(self.td.name, str(uuid.uuid4()) + ".cnf")
+            cnf_path = os.path.join(self.td.name, str(uuid4()) + ".cnf")
             from_cnf.to_file(cnf_path)
             try:
                 self.env = SatEnv(cnf_path)

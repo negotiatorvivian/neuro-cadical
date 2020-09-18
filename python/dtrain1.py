@@ -17,7 +17,7 @@ from ray.util.sgd.torch.training_operator import TrainingOperator
 import warnings
 
 from ray.util.sgd.utils import TimerStat, AverageMeter
-from ray.util.sgd.torch.constants import (SCHEDULER_STEP_EPOCH, SCHEDULER_STEP_BATCH, SCHEDULER_STEP, BATCH_COUNT)
+from ray.util.sgd.torch.constants import (SCHEDULER_STEP_EPOCH, SCHEDULER_STEP_BATCH, SCHEDULER_STEP)
 
 from sgd import TorchTrainer
 from train1 import train_step, TrainLogger
