@@ -1,5 +1,6 @@
 import subprocess
 import time
+import multiprocessing
 import ray
 from ray.util import ActorPool
 from copy import deepcopy
@@ -14,8 +15,9 @@ import itertools
 import math
 
 from gen_data import gen_lbdp, SimpleLogger
-from util import recursively_get_files
+from util import recursively_get_files, timestamp
 from config import CADICAL_PATH
+from data_util import DataWriter
 
 CLAUSE_LIMIT = int(150000)
 
@@ -134,7 +136,7 @@ def simplify_cnf_path(cnf_path, CLAUSE_LIMIT):
 
 
 @ray.remote
-class Worker:
+class Worker():
     def __init__(self, writer_handle, dumpfreq = 100e3, timeout = 300, num_subproblems = 8, random_units = 5):
         self.writer_handle = writer_handle
         self.dumpfreq = dumpfreq
@@ -142,7 +144,7 @@ class Worker:
         self.num_subproblems = num_subproblems
         self.random_units = random_units
 
-    @ray.method(num_return_vals = 1)
+    @ray.method(num_returns = 1)
     def work(self, task):
         if task.task_type == 0:
             return task.original_cnf_path, self.process_task_0(task), task
@@ -152,7 +154,8 @@ class Worker:
             return task.original_cnf_path, self.process_task_2(task), task
 
     def process_task_0(self, task):
-        status, child_paths = self.extract_datapoint(task, num_subproblems = self.num_subproblems, produce_derived = True)
+        status, child_paths = self.extract_datapoint(task, num_subproblems = self.num_subproblems,
+                                                     produce_derived = True)
         tmp_tmpdir = task.tmpdir
         tmp_original_cnf_path = task.original_cnf_path
         task.gc()
@@ -160,7 +163,7 @@ class Worker:
 
     def process_task_1(self, task):
         status, child_paths = self.extract_datapoint(task, num_subproblems = self.num_subproblems,
-            num_units = self.random_units)  # extract a datapoint
+                                                     num_units = self.random_units)  # extract a datapoint
         tmp_tmpdir = task.tmpdir
         tmp_original_cnf_path = task.original_cnf_path
         task.gc()
@@ -188,7 +191,7 @@ class Worker:
                 try:
                     new_cnf_path = simplify_cnf_path(task.cnf_path, CLAUSE_LIMIT)
                     cnf.from_file(new_cnf_path,
-                        compressed_with = "use_ext")  # circumvent pysat DIMACS parser complaining about invalid DIMACS files
+                                  compressed_with = "use_ext")  # circumvent pysat DIMACS parser complaining about invalid DIMACS files
                 except:  # shrug
                     return 1, []
 
@@ -201,8 +204,8 @@ class Worker:
                     res = None
                     TOO_BIG_FLAG = True
                 else:
-                    res = gen_lbdp(tempfile.TemporaryDirectory(), cnf, dump_dir = (dump_dir_name + "/"), dumpfreq = self.dumpfreq,
-                        timeout = self.timeout, clause_limit = CLAUSE_LIMIT)
+                    res = gen_lbdp(tempfile.TemporaryDirectory(), cnf, dump_dir = (dump_dir_name + "/"),
+                                   dumpfreq = self.dumpfreq, timeout = self.timeout, clause_limit = CLAUSE_LIMIT)
                     glue_cutoff = 50
                     if np.sum(res.glue_counts) <= glue_cutoff:
                         print(f"[WARNING] PROBLEM HAS FEWER THAN {glue_cutoff} GLUE COUNTS, DISCARDING")
@@ -234,7 +237,7 @@ class Worker:
                             print("NUM TRIES OR RANDOM UNITS EXCEEDED LIMIT, STOPPING")
                             break
                         for subproblem in Subproblems(task.cnf_path, num_subproblems = num_subproblems,
-                                random_units = subproblem_random_units):
+                                                      random_units = subproblem_random_units):
                             print("ENTERING SUBPROBLEM LOOP")
                             subproblem_path = os.path.join(task.tmpdir, (str(uuid.uuid4()) + ".cnf.gz"))
                             subproblem.to_file(subproblem_path, compress_with = "gzip")
@@ -290,7 +293,7 @@ class Worker:
                             if subproblem_random_units > 15:
                                 break
                             for subproblem in Subproblems(task.cnf_path, num_subproblems = num_subproblems,
-                                    random_units = subproblem_random_units):
+                                                          random_units = subproblem_random_units):
                                 subproblem_path = os.path.join(task.tmpdir, (str(uuid.uuid4()) + ".cnf.gz"))
                                 subproblem.to_file(subproblem_path, compress_with = "gzip")
                                 try:
@@ -320,7 +323,8 @@ def _parse_main():
     parser.add_argument("cnf_dir", action = "store")
     parser.add_argument("dest", action = "store")
     parser.add_argument("--n-workers", dest = "n_workers", action = "store", type = int, default = 0)
-    parser.add_argument("--n-datapoints-per-file", dest = "n_datapoints_per_file", type = int, action = "store", default = 5000)
+    parser.add_argument("--n-datapoints-per-file", dest = "n_datapoints_per_file", type = int, action = "store",
+                        default = 5000)
     parser.add_argument("--dumpfreq", dest = "dumpfreq", type = float, action = "store", default = 100e3)
     parser.add_argument("--subproblems", dest = "num_subproblems", type = int, action = "store", default = 8)
     parser.add_argument("--random-units", dest = "random_units", type = int, action = "store", default = 5)
@@ -330,27 +334,27 @@ def _parse_main():
     opts = parser.parse_args()
 
     if opts.n_workers == 0:
-        raise Exception("must specify positive n_workers")
+        opts.n_workers = opts.n_workers if opts.n_workers else multiprocessing.cpu_count()
 
     opts.dumpfreq = int(opts.dumpfreq)
 
     return opts
 
 
-def _main(cnf_dir, n_datapoints_per_file, dest, n_workers, dumpfreq = 100e3, num_subproblems = 8, random_units = 5, timeout = 300,
-          rootdir = None, n_datapoints = 25000):
+def _main(cnf_dir, n_datapoints_per_file, dest, n_workers, dumpfreq = 100e3, num_subproblems = 8, random_units = 5,
+          timeout = 300, rootdir = None, n_datapoints = 25000):
     logger = SimpleLogger(os.path.join(dest, "logs", "main_loop", f"{str(uuid.uuid4())}.txt"))
     try:
         ray.init(address = 'auto', redis_password = '5241590000000000')
     except:
-        ray.init()
+        ray.init(num_cpus = n_workers, num_gpus = 1)
     tms_dict = {cnf_path: TaskManager(cnf_path, rootdir) for cnf_path in
                 recursively_get_files(cnf_dir, forbidden = ["bz2", "xz"], exts = ["cnf", "gz"])}
-    logger.write("STARTING DATA GENERATION LOOP WITH", len(tms_dict.keys()), "CNFs")
     time.sleep(5)
     writer = lbdpWriter.remote(n_datapoints_per_file, dest)
-    workers = [Worker.remote(writer, dumpfreq = dumpfreq, num_subproblems = num_subproblems, random_units = random_units, timeout = timeout)
-               for _ in range(n_workers)]
+    workers = [
+        Worker.remote(writer, dumpfreq = dumpfreq, num_subproblems = num_subproblems, random_units = random_units,
+                      timeout = timeout) for _ in range(n_workers)]
     pool = ActorPool(workers)
     for tm in tms_dict.values():
         for task in tm:
@@ -376,8 +380,8 @@ def _main(cnf_dir, n_datapoints_per_file, dest, n_workers, dumpfreq = 100e3, num
                 tms_dict.pop(cnf_path)
                 print("POPPED FROM TMS_DICT")
                 try:
-                    shutil.rmtree(tms.tmpdir.name)
-                    os.makedirs(tms.tmpdir.name)
+                    shutil.rmtree(tm.tmpdir.name)
+                    os.makedirs(tm.tmpdir.name)
                     time.sleep(1)
                 except:
                     pass
@@ -397,3 +401,4 @@ def _main(cnf_dir, n_datapoints_per_file, dest, n_workers, dumpfreq = 100e3, num
 
 if __name__ == "__main__":
     _main(**vars(_parse_main()))
+# cadical/build/cadical ./data/dummy_data/sr_2.cnf -model ./torchscript/deploy/sc/satcomp_weights.pt --refocus --queryinterval=50000 --refocusinittime=0 --refocusceil=250000 --refocusdecaybase=1000 --refocusdecayexp=2

@@ -10,18 +10,20 @@ import torch.utils.data as td
 from batch import Batcher
 import json
 from os import path
+import multiprocessing
 import ray
 from ray.util.sgd.torch.training_operator import TrainingOperator
 import warnings
 
 from ray.util.sgd.utils import TimerStat, AverageMeter
-from ray.util.sgd.torch.constants import (SCHEDULER_STEP_EPOCH, SCHEDULER_STEP_BATCH, SCHEDULER_STEP, BATCH_COUNT)
+from ray.util.sgd.torch.constants import (SCHEDULER_STEP_EPOCH, SCHEDULER_STEP_BATCH, SCHEDULER_STEP)
 
 from sgd import TorchTrainer
 from train1 import train_step, TrainLogger
 import util
 from data_util import *
 from gnn import *
+from gen_data import CNFDirDataset
 
 DTrainCfg = collections.namedtuple("DTrainCfg", ["logdir", "modelcfg",  # model configuration dict
                                                  "optimizer", "lr", "data_dir", "ckpt_dir", "ckpt_freq", "batch_size",
@@ -53,7 +55,8 @@ def optimizer_creator(model, config):
 
 
 def data_creator(config):
-    return H5Dataset(config["data_dir"], config["batch_size"])
+    # return H5Dataset(config["data_dir"], config["batch_size"])
+    return CNFDirDataset(config["data_dir"], config["batch_size"])
 
 
 def loss_creator(config):  # this is just a placeholder, the actual loss function is hardcoded in train_fn
@@ -120,6 +123,9 @@ class GNN1TrainingOperator(TrainingOperator):
         except Exception as e:
             print("WARNING: EXCEPTION ", e)
             pass
+
+    def setup(self, config):
+        pass
 
     def save(self):
         if self.index == 0:
@@ -218,6 +224,7 @@ def parse_config():
         opts.lr = testcfg.lr
         opts.ckpt_dir = testcfg.ckpt_dir
         opts.ckpt_freq = testcfg.ckpt_freq
+        opts.use_gpu = True
     else:
         with open(opts.modelcfg, "r") as f:
             cfg_dict = json.load(f)
@@ -249,6 +256,8 @@ def _main():
     n_data_workers = cfg.pop("n_data_workers")
     num_epochs = cfg.pop("num_epochs")
     batch_size = cfg.pop("batch_size")
+    n_data_workers = n_data_workers if n_data_workers else multiprocessing.cpu_count()
+
     return parallel_train1(num_replicas, batch_size, cfg, n_data_workers, num_epochs)
 
 

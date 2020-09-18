@@ -11,6 +11,7 @@ import os
 import sys
 from pysat.solvers import Solver
 from pysat.formula import CNF
+
 import numpy as np
 # import cnfformula
 import random
@@ -19,7 +20,6 @@ import h5py as h5
 import shutil
 import torch.nn as nn
 from types import SimpleNamespace
-
 import util as util
 from data_util import *
 from config import *
@@ -41,7 +41,7 @@ def del_occ(tsr):
     return result
 
 
-class CNFDataset:
+class CNFDataset(td.IterableDataset):
     def __init__(self):
         raise Exception("abstract method")
 
@@ -60,10 +60,12 @@ class CNFDataset:
 
 
 class CNFDirDataset(CNFDataset):
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, batch_size):
+        super(CNFDirDataset).__init__()
         self.data_dir = data_dir
         self.files = util.files_with_extension(self.data_dir, "cnf")
         self.file_index = 0
+        self.batch_size = batch_size
 
     def gen_formula(self):
         try:
@@ -72,6 +74,12 @@ class CNFDirDataset(CNFDataset):
             raise StopIteration
         self.file_index += 1
         return cnf
+
+    def __iter__(self):
+        if self.batch_size is None:
+            return super().__iter__()
+        else:
+            return batch_iterator(super().__iter__(), self.batch_size)
 
 
 class Logger:
@@ -146,6 +154,7 @@ def lbdcdl(cnf_dir,
         cadical_command += [f"--clauselim={int(clause_limit)}"]
     cadical_command += [f"--seed={int(np.random.choice(int(10e5)))}"]
     cadical_command += [cnf_path]
+    print(cadical_command)
 
     subprocess.run(cadical_command, stdout=subprocess.PIPE)
 
@@ -195,7 +204,7 @@ class CNFProcessor:
     def __init__(self,
                  cnfdataset,
                  tmpdir=None,
-                 use_glue_counts=False,
+                 use_glue_counts=True,
                  timeout=None):
         if tmpdir is None:
             self.tmpdir = tempfile.TemporaryDirectory()

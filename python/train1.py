@@ -6,6 +6,7 @@ from torch.utils.tensorboard import SummaryWriter
 import tempfile
 import json
 import datetime
+import multiprocessing
 import time
 import torch.multiprocessing as mp
 
@@ -34,7 +35,7 @@ def compute_softmax_kldiv_loss(logitss, probss):
         # print(logits.size())
         logits = F.log_softmax(logits, dim = 0)  # must be log-probabilities
         cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]),
-            reduction = "sum")
+                      reduction = "sum")
         # print("CL", cl)
         result += cl  # result += F.kl_div(logits, probs, reduction="none")
     result = result / float(len(probss))
@@ -83,10 +84,9 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
     return torch.sparse.FloatTensor(indices = indices, values = values, size = size)
 
 
-def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
+def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
                use_glue_counts = False):
-    # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly,
-    # because DataLoader does magic conversions from numpy arrays to torch tensors
+    # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
     Gs = []
     var_lemma_countss = []
@@ -185,7 +185,7 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
             num_g_nonzero_entries = torch.nonzero(g).size(0)
             if not num_g_entries == num_g_nonzero_entries:
                 print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g,
-                    "AHHHHHHHH")
+                      "AHHHHHHHH")
         except AttributeError:
             pass
 
@@ -197,7 +197,7 @@ def train_step(model, batcher, optim, nmsdps, device = "cpu", CUDA_FLAG = False,
     return drat_loss, core_loss, core_clause_loss, loss, x, l2_loss
 
 
-def train_step2(model, optim, nmsdps, device = "cpu", CUDA_FLAG = False, use_NMSDP_to_sparse2 = False):
+def train_step2(model, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False):
     optim.zero_grad()
     Gs = []
     core_var_masks = []
@@ -375,8 +375,9 @@ class Trainer:
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             for nmsdps in self.dataset:
                 drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
-                    self.optimizer, nmsdps, device = self.device, CUDA_FLAG = self.CUDA_FLAG,
-                    use_NMSDP_to_sparse2 = True)
+                                                                                              self.optimizer, nmsdps, device = self.device,
+                                                                                              CUDA_FLAG = self.CUDA_FLAG,
+                                                                                              use_NMSDP_to_sparse2 = True)
 
                 self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                 self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -415,7 +416,7 @@ def _parse_main():
     parser.add_argument("--batch-size", type = int, dest = "batch_size", action = "store")
     parser.add_argument("--n-data-workers", type = int, dest = "n_data_workers", action = "store")
     parser.add_argument("--ckpt-dir", type = str, dest = "ckpt_dir", action = "store")
-    parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store")
+    parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store", default = 10)
     parser.add_argument("--n-steps", type = int, dest = "n_steps", action = "store", default = -1)
     parser.add_argument("--n-epochs", type = int, dest = "n_epochs", action = "store", default = -1)
     parser.add_argument("--forever", action = "store_true")
@@ -428,6 +429,7 @@ def _parse_main():
 def _main_train1(cfg = None, opts = None):
     if opts is None:
         opts = _parse_main()
+        opts.n_data_workers = opts.n_data_workers if opts.n_data_workers else multiprocessing.cpu_count()
 
     if cfg is None:
         # cfg = defaultGNN1Cfg
@@ -437,8 +439,8 @@ def _main_train1(cfg = None, opts = None):
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
-    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = True,
-        n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
+    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
+                      n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
         while True:
@@ -454,7 +456,7 @@ def _test_trainer(opts = None):
     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
     trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
-        n_steps = opts.n_steps)
+                      n_steps = opts.n_steps)
     for _ in range(5):
         trainer.train()  # trainer.load_latest_ckpt()
 
@@ -464,3 +466,5 @@ GNN1Cfg0 = {
     "activation": "leaky_relu"
 }
 
+if __name__ == "__main__":
+    _main_train1()
