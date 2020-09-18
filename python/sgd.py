@@ -320,8 +320,9 @@ class TorchTrainer:
 
         _validate_scheduler_step_freq(scheduler_step_freq)
         self.scheduler_step_freq = scheduler_step_freq
-
+        print(self.model_creator)
         self._start_workers(self.max_replicas)
+
 
     def _start_workers(self, num_replicas):
         logger.info(f"start_workers: Setting %d replicas." % num_replicas)

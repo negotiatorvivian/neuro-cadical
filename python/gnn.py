@@ -81,8 +81,8 @@ class GNN1(nn.Module):
     def __init__(self, clause_dim, lit_dim, n_hops, n_layers_C_update, n_layers_L_update, n_layers_score, activation,
             average_pool = False, normalize = True, **kwargs):
         super(GNN1, self).__init__(**kwargs)
-        self.L_layer_norm = nn.LayerNorm(lit_dim)
-        self.L_init = nn.Parameter(torch.nn.init.xavier_normal_(torch.empty([1, lit_dim])), requires_grad = True)
+        self.L_layer_norm = nn.LayerNorm(lit_dim)       # LayerNorm(16, )
+        self.L_init = nn.Parameter(torch.nn.init.xavier_normal_(torch.empty([1, lit_dim])), requires_grad = True) # (1,16)
         self.C_update = BasicMLP(input_dim = 2 * lit_dim, hidden_dims = [2 * lit_dim for _ in range(n_layers_C_update)],
             output_dim = clause_dim, activation = activation, p_dropout = 0.05)
         self.L_update = BasicMLP(input_dim = (clause_dim), hidden_dims = [clause_dim for _ in range(n_layers_L_update)],
@@ -106,30 +106,25 @@ class GNN1(nn.Module):
 
     def forward(self, G):
         n_clauses, n_lits = G.size()
-        n_vars = n_lits / 2
-        L = self.L_init.repeat(n_lits, 1)
+        L = self.L_init.repeat(n_lits, 1)       # (n_lits, 16)
         if not (G.device == L.device):
             L = L.to(G.device)
 
         for T in range(self.n_hops):
-            L_flip = torch.cat([L[int(L.size()[0] / 2):], L[0:int(L.size()[0] / 2)]], dim = 0)
+            L_flip = torch.cat([L[int(L.size()[0] / 2):], L[0:int(L.size()[0] / 2)]], dim = 0) # (n_lits, 16)
             if self.average_pool:
-                C_pre_msg = torch.cat([L, L_flip, torch.ones(G.size()[1], 1, dtype = torch.float32, device = G.device)],
-                    dim = 1)
+                C_pre_msg = torch.cat([L, L_flip, torch.ones(G.size()[1], 1, dtype = torch.float32, device = G.device)], dim = 1)   # (n_lits, 33)
             else:
-                C_pre_msg = torch.cat([L, L_flip], dim = 1)
-            C_msg = torch.sparse.mm(G, C_pre_msg)
+                C_pre_msg = torch.cat([L, L_flip], dim = 1)     # (n_lits, 32)
+            C_msg = torch.sparse.mm(G, C_pre_msg)      #(n_clauses, 32)
 
             if self.average_pool:
-
                 C_neighbor_counts = C_msg[:, -1:]
-
                 C_msg = C_msg[:, :-1]
-
                 C_msg = C_msg / torch.max(C_neighbor_counts,
                     torch.ones(C_neighbor_counts.size()[0], C_neighbor_counts.size()[1], device = G.device))
 
-            C = self.C_update(C_msg)
+            C = self.C_update(C_msg)    #(n_clauses, 64)
             if self.normalize:
                 C = C - C.mean(dim = 0)
                 C = C / (C.std(dim = 0) + 1e-10)

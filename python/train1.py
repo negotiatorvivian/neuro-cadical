@@ -14,7 +14,7 @@ from python.util import check_make_path, files_with_extension
 from python.gnn import *
 from python.batch import Batcher
 from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
-from python.gen_data import NMSDP
+from python.gen_data import NMSDP, mk_CNFDataloader, CNFProcessor
 
 
 def compute_softmax_kldiv_loss(logitss, probss):
@@ -85,7 +85,7 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
 
 
 def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
-               use_glue_counts = False):
+        use_glue_counts = True):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
     Gs = []
@@ -438,7 +438,8 @@ def _main_train1(cfg = None, opts = None):
 
     model = GNN1(**cfg)
 
-    dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
+    dataset = mk_CNFDataloader(opts.data_dir, opts.batch_size, opts.n_data_workers)
+    # pocessor = CNFProcessor(dataset, timeout = 30)
     trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
                       n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
