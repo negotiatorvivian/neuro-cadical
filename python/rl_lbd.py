@@ -26,6 +26,7 @@ from util import files_with_extension, recursively_get_files
 def discount_cumsum(x, discount = 1):
     """
     magic from rllab for computing discounted cumulative sums of vectors.
+    计算向量的折现累积和
     input:
     vector x,
       [x0,
@@ -113,7 +114,7 @@ class NeuroAgent(Agent):
 
     def act(self, G):
         p_logits, v_pre_logits = self.model(G)
-        return p_logits.squeeze().detach(), F.sigmoid(v_pre_logits.mean()).detach()
+        return p_logits.squeeze().detach(), torch.sigmoid(v_pre_logits.mean()).detach()
 
     def set_weights(self, model_state_dict):
         self.model.load_state_dict(model_state_dict)
@@ -258,7 +259,7 @@ def train_step(model, optim, batcher, Gs, mu_logitss, actions, gs, advs, device 
         log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
 
     p_loss = -(log_probs * psis).mean()
-    vals = F.sigmoid(
+    vals = torch.sigmoid(
         torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
 
     v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))

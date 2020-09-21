@@ -168,6 +168,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
     # print("EXAMPLE DRAT VAR COUNT", var_lemma_countss[0])
 
     loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
+    print('loss:', loss)
     # loss = drat_loss
     loss.backward()
 
@@ -244,6 +245,7 @@ class TrainLogger:
         check_make_path(self.logdir)
 
     def write_scalar(self, name, value, global_step):
+        print(name, value, global_step)
         self.writer.add_scalar(name, value, global_step)
 
     def write_log(self, *args):
@@ -418,7 +420,7 @@ def _parse_main():
     parser.add_argument("--ckpt-dir", type = str, dest = "ckpt_dir", action = "store")
     parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store", default = 10)
     parser.add_argument("--n-steps", type = int, dest = "n_steps", action = "store", default = -1)
-    parser.add_argument("--n-epochs", type = int, dest = "n_epochs", action = "store", default = -1)
+    parser.add_argument("--n-epochs", type = int, dest = "n_epochs", action = "store", default = 100)
     parser.add_argument("--forever", action = "store_true")
     parser.add_argument("--index", action = "store", default = 0, type = int)
     opts = parser.parse_args()
