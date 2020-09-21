@@ -59,37 +59,41 @@ class CNFDataset(td.IterableDataset):
         return _gen_formula()
 
 
-class CNFDirDataset(CNFDataset):
+class CNFDirDataset:
     def __init__(self, data_dir, batch_size):
         self.data_dir = data_dir
         self.files = util.files_with_extension(self.data_dir, "cnf")
         self.file_index = 0
         self.batch_size = batch_size
+        self.lbdps = self.gen_formula()
 
     def __len__(self):
         return len(self.files)
 
-    def __iter__(self):
+    def __next__(self):
         if self.batch_size is None:
-            return super().__iter__()
+            return self._mk_iter()
         else:
-            length = min(self.batch_size, self.__len__())
-            return batch_iterator(super().__iter__(), length)
+            return batch_iterator(self._mk_iter(), self.batch_size)
+
+    def _mk_iter(self):
+        for f in self.files:
+            cnf = CNF(from_file = f)
+            td = tempfile.TemporaryDirectory()
+            yield gen_lbdp(td, cnf)
 
     def gen_formula(self):
         try:
-            cnf = CNF(from_file = self.files[self.file_index])
+            cnfs = []
+            for i in range(len(self.files)):
+                cnf = CNF(from_file = self.files[i])
+                self.file_index = i
+                cnfs.append(cnf)
+            return cnfs
         except IndexError:
             raise StopIteration
-        self.file_index += 1
-        td = tempfile.TemporaryDirectory()
-        return gen_lbdp(td, cnf)
-
-    def __iter__(self):
-        if self.batch_size is None:
-            return super().__iter__()
-        else:
-            return batch_iterator(super().__iter__(), self.batch_size)
+        # self.file_index += 1
+        # return gen_lbdp(td, cnf)
 
 
 class Logger:
@@ -158,7 +162,7 @@ def lbdcdl(cnf_dir, cnf, llpath, dump_dir = None, dumpfreq = 50e3, timeout = Non
         cadical_command += [f"--clauselim={int(clause_limit)}"]
     cadical_command += [f"--seed={int(np.random.choice(int(10e5)))}"]
     cadical_command += [cnf_path]
-    print(cadical_command)
+    # print(cadical_command)
 
     subprocess.run(cadical_command, stdout = subprocess.PIPE)
 
@@ -226,3 +230,27 @@ def mk_CNFDataloader(data_dir, batch_size, num_workers):
     cnf_dataset = CNFDirDataset(data_dir, batch_size)
     return td.DataLoader(cnf_dataset, batch_size = 1, num_workers = num_workers, worker_init_fn = h5_worker_init_fn,
         pin_memory = True)
+
+
+def parse_main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("data_dir", action = "store")
+    parser.add_argument("dest_dir", action = "store")
+    parser.add_argument("--num_workers", dest = "num_workers", action = "store", default = 8, type = int)
+    parser.add_argument("--batch_size", dest = "batch_size", action = "store", type = int, default = 16)
+    opts = parser.parse_args()
+    return opts
+
+
+if __name__ == "__main__":
+    cfg = parse_main()
+    cnf_dataset = CNFDirDataset(cfg.data_dir, cfg.batch_size)
+    index = 0
+    processor = CNFProcessor(cnf_dataset.lbdps)
+    name = str(uuid.uuid4())
+    with h5py.File(os.path.join(cfg.dest_dir, name + '.h5'), 'a') as f:
+        for ldbp in processor:
+            print(ldbp.dp_id)
+            serialize_lbdp(ldbp, f)
+

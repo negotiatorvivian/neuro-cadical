@@ -55,8 +55,8 @@ def optimizer_creator(model, config):
 
 
 def data_creator(config):
-    # return H5Dataset(config["data_dir"], config["batch_size"])
-    return CNFDirDataset(config["data_dir"], config["batch_size"])
+    return H5Dataset(config["data_dir"],
+        config["batch_size"])  # return CNFDirDataset(config["data_dir"], config["batch_size"])
 
 
 def loss_creator(config):  # this is just a placeholder, the actual loss function is hardcoded in train_fn
@@ -220,11 +220,11 @@ def parse_config():
     if opts.modelcfg is None:
         opts.modelcfg = defaultGNN1Cfg
         opts.logdir = testcfg.logdir
-        opts.data_dir = testcfg.data_dir
+        opts.data_dir = opts.data_dir
         opts.lr = testcfg.lr
         opts.ckpt_dir = testcfg.ckpt_dir
         opts.ckpt_freq = testcfg.ckpt_freq
-        opts.use_gpu = True
+        opts.use_gpu = True if torch.cuda.is_available() else False
     else:
         with open(opts.modelcfg, "r") as f:
             cfg_dict = json.load(f)
@@ -241,7 +241,8 @@ def parallel_train1(num_replicas, batch_size, cfg, n_data_workers = 0, num_epoch
         ray.init()
     trainer = TorchTrainer(model_creator, data_creator, optimizer_creator, loss_creator = nn.MSELoss, config = cfg,
         ckpt_dir = cfg["ckpt_dir"], ckpt_freq = cfg["ckpt_freq"], dataloader_config = DATALOADER_CONFIG,
-        num_replicas = num_replicas, batch_size = batch_size,  # move batching into the datasets
+        num_replicas = num_replicas, num_cpus = n_data_workers, batch_size = batch_size,
+        # move batching into the datasets
         use_gpu = cfg["use_gpu"], training_operator_cls = GNN1TrainingOperator)
 
     for _ in range(num_epochs):
