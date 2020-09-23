@@ -35,7 +35,7 @@ def compute_softmax_kldiv_loss(logitss, probss):
         # print(logits.size())
         logits = F.log_softmax(logits, dim = 0)  # must be log-probabilities
         cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]),
-                      reduction = "sum")
+            reduction = "sum")
         # print("CL", cl)
         result += cl  # result += F.kl_div(logits, probs, reduction="none")
     result = result / float(len(probss))
@@ -84,8 +84,8 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
     return torch.sparse.FloatTensor(indices = indices, values = values, size = size)
 
 
-def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False,
-        use_glue_counts = True):
+def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False,
+        use_NMSDP_to_sparse2 = False, use_glue_counts = True):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
     Gs = []
@@ -185,7 +185,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
             num_g_nonzero_entries = torch.nonzero(g).size(0)
             if not num_g_entries == num_g_nonzero_entries:
                 print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g,
-                      "AHHHHHHHH")
+                    "AHHHHHHHH")
         except AttributeError:
             pass
 
@@ -267,7 +267,7 @@ class Trainer:
     """
 
     def __init__(self, model, dataset, lr, ckpt_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
-                 index = 0):
+            index = 0):
         self.model = model
         self.dataset = dataset
         self.ckpt_dir = ckpt_dir
@@ -375,9 +375,8 @@ class Trainer:
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             for nmsdps in self.dataset:
                 drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
-                                                                                              self.optimizer, nmsdps, device = self.device,
-                                                                                              CUDA_FLAG = self.CUDA_FLAG,
-                                                                                              use_NMSDP_to_sparse2 = True)
+                    self.optimizer, nmsdps, device = self.device, CUDA_FLAG = self.CUDA_FLAG,
+                    use_NMSDP_to_sparse2 = True)
 
                 self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                 self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -438,10 +437,10 @@ def _main_train1(cfg = None, opts = None):
 
     model = GNN1(**cfg)
 
-    dataset = mk_CNFDataloader(opts.data_dir, opts.batch_size, opts.n_data_workers)
+    dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
     # pocessor = CNFProcessor(dataset, timeout = 30)
     trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
-                      n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
+        n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
         while True:
@@ -457,7 +456,7 @@ def _test_trainer(opts = None):
     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
     trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
-                      n_steps = opts.n_steps)
+        n_steps = opts.n_steps)
     for _ in range(5):
         trainer.train()  # trainer.load_latest_ckpt()
 

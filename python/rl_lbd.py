@@ -447,7 +447,7 @@ def _parse_main():
     parser.add_argument("--time-limit", dest = "time_limit", action = "store", type = float)
     parser.add_argument("--lr", dest = "lr", type = float, action = "store", default = 1e-4)
     parser.add_argument("--ckpt-dir", dest = "ckpt_dir", action = "store")
-    parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int)
+    parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
     parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 32)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
     parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 25, type = int)
@@ -481,10 +481,9 @@ def _main():
 
     learner = ray.remote(num_gpus = (1 if torch.cuda.is_available() else 0))(Learner).remote(buf = buf,
         weight_manager = weight_manager, batch_size = opts.batch_size, ckpt_freq = opts.ckpt_freq,
-        ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = True,
+        ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = False,
         model_cfg = model_cfg)  # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
-    workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, model_cfg = model_cfg) for _
-               in range(opts.n_workers)]
+    workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, model_cfg = model_cfg) for _ in range(opts.n_workers)]
     pool = ActorPool(workers)
 
     def shuffle_environments(ws):
