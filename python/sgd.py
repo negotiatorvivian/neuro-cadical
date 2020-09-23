@@ -70,7 +70,7 @@ class DistributedTorchRunner(TorchRunner):
         """
         self.world_rank = world_rank
         self.world_size = world_size
-        self._setup_distributed_pytorch(url, world_rank, world_size)
+        # self._setup_distributed_pytorch(url, world_rank, world_size)
         self._setup_training()
 
     def _setup_distributed_pytorch(self, url, world_rank, world_size):
@@ -78,7 +78,7 @@ class DistributedTorchRunner(TorchRunner):
             logger.debug("Connecting to {} world_rank: {} world_size: {}".format(url, world_rank, world_size))
             logger.debug("using {}".format(self.backend))
             dist.init_process_group(backend = self.backend, init_method = url, rank = world_rank,
-                world_size = world_size)
+                                    world_size = world_size)
 
     def _setup_training(self):
         logger.debug("Creating model")
@@ -111,7 +111,7 @@ class DistributedTorchRunner(TorchRunner):
 
         try:
             train_set.dist_configure(self.world_rank,
-                self.world_size)  # shard dataset files on each worker before reading
+                                     self.world_size)  # shard dataset files on each worker before reading
             print(f"RESTRICTED DATASET ON WORKER {self.index} TO SHARD OF SIZE {len(train_set.files)}")
         except AttributeError:
             raise Exception("Are you using an H5Dataset object?")
@@ -123,12 +123,13 @@ class DistributedTorchRunner(TorchRunner):
         self.validation_loader = None
         if val_set:
             self.validation_loader = torch.utils.data.DataLoader(val_set, batch_size = self.batch_size,
-                **self.dataloader_config)
+                                                                 **self.dataloader_config)
 
         self.training_operator = self.training_operator_cls(self.config, models = self.models,
-            optimizers = self.optimizers, criterion = self.criterion, schedulers = self.schedulers,
-            use_fp16 = self.use_fp16, ckpt_freq = self.ckpt_freq, ckpt_dir = self.ckpt_dir, index = self.index,
-            lr = self.config["lr"])
+                                                            optimizers = self.optimizers, criterion = self.criterion, schedulers = self.schedulers,
+                                                            use_fp16 = self.use_fp16, ckpt_freq = self.ckpt_freq, ckpt_dir = self.ckpt_dir,
+                                                            index = self.index,
+                                                            lr = self.config["lr"])
 
     def train_epoch(self, **kwargs):
         """Runs a training epoch and updates the model parameters.
@@ -276,8 +277,8 @@ class TorchTrainer:
 
     def __init__(self, model_creator, data_creator, optimizer_creator, loss_creator, ckpt_freq, ckpt_dir,
                  scheduler_creator = None, training_operator_cls = None, initialization_hook = None, config = None,
-                 dataloader_config = None, num_replicas = 1, use_gpu = False, batch_size = 16, backend = "auto",
-                 use_fp16 = False, apex_args = None, scheduler_step_freq = "batch"):
+                 dataloader_config = None, num_replicas = 1, num_cpus = 1, use_gpu = False, serialize_data_creation = True, batch_size = 16,
+                 backend = "auto", use_fp16 = False, use_tqdm = False, apex_args = None, scheduler_step_freq = "batch"):
         if num_replicas > 1 and not dist.is_available():
             raise ValueError(("Distributed PyTorch is not supported on macOS. "
                               "To run without distributed PyTorch, set 'num_replicas=1'. "
@@ -305,10 +306,13 @@ class TorchTrainer:
 
         # TODO: Have an auto "use_gpu" option to detect and use GPUs.
         self.use_gpu = use_gpu
+        self.serialize_data_creation = serialize_data_creation
         self.batch_size = batch_size
         self.max_replicas = num_replicas
+        self.num_cpus = num_cpus
 
         self.use_fp16 = use_fp16
+        self.use_tqdm = use_tqdm
 
         if apex_args and not isinstance(apex_args, dict):
             raise ValueError("apex_args needs to be a dict object.")
@@ -320,32 +324,37 @@ class TorchTrainer:
 
         _validate_scheduler_step_freq(scheduler_step_freq)
         self.scheduler_step_freq = scheduler_step_freq
-        print(self.model_creator)
         self._start_workers(self.max_replicas)
-
 
     def _start_workers(self, num_replicas):
         logger.info(f"start_workers: Setting %d replicas." % num_replicas)
         if num_replicas == 1:
             # Generate actor class
-            Runner = ray.remote(num_cpus = 1, num_gpus = int(self.use_gpu))(TorchRunner)
+            Runner = ray.remote(num_cpus = self.num_cpus, num_gpus = int(self.use_gpu))(TorchRunner)
             # Start workers
             for key in self.dataloader_config:
                 self.config[key] = self.dataloader_config[key]
             self.config['batch_size'] = self.batch_size
             # print(self.config)
             self.workers = [
-                Runner.remote(self.model_creator, self.data_creator, self.optimizer_creator, self.loss_creator,
-                    self.scheduler_creator, training_operator_cls = self.training_operator_cls, config = self.config,
-                    use_fp16 = self.use_fp16, apex_args = self.apex_args,
-                    scheduler_step_freq = self.scheduler_step_freq, )]
+                Runner.remote(self.model_creator,
+                              self.data_creator,
+                              self.optimizer_creator,
+                              self.loss_creator,
+                              self.scheduler_creator,
+                              training_operator_cls = self.training_operator_cls,
+                              config = self.config,
+                              batch_size = self.batch_size,
+                              use_fp16 = self.use_fp16,
+                              apex_args = self.apex_args,
+                              scheduler_step_freq = self.scheduler_step_freq, )]
             if self.initialization_hook:
                 self.apply_all_workers(self.initialization_hook)
             # Get setup tasks in order to throw errors on failure
             ray.get(self.workers[0].setup.remote())
         else:
             # Generate actor class
-            Runner = ray.remote(num_cpus = 1, num_gpus = int(self.use_gpu))(DistributedTorchRunner)
+            Runner = ray.remote(num_cpus = self.num_cpus, num_gpus = int(self.use_gpu))(DistributedTorchRunner)
             # Compute batch size per replica
             batch_size_per_replica = self.batch_size // num_replicas
             if self.batch_size % num_replicas > 0:
@@ -353,26 +362,26 @@ class TorchTrainer:
                 logger.warning(("Changing batch size from {old_batch_size} to "
                                 "{new_batch_size} to evenly distribute batches across "
                                 "{num_replicas} replicas.").format(old_batch_size = self.batch_size,
-                    new_batch_size = new_batch_size, num_replicas = num_replicas))
+                                                                   new_batch_size = new_batch_size, num_replicas = num_replicas))
             # Start workers
             self.workers = []
             for i in range(num_replicas):
                 self.workers.append(
                     Runner.remote(self.model_creator, self.data_creator, self.optimizer_creator, self.loss_creator,
-                        self.scheduler_creator, index = i, ckpt_freq = self.ckpt_freq, ckpt_dir = self.ckpt_dir,
-                        backend = self.backend, training_operator_cls = self.training_operator_cls,
-                        config = self.config, dataloader_config = self.dataloader_config,
-                        batch_size = batch_size_per_replica, use_fp16 = self.use_fp16, apex_args = self.apex_args,
-                        scheduler_step_freq = self.scheduler_step_freq))
+                                  self.scheduler_creator, index = i, ckpt_freq = self.ckpt_freq, ckpt_dir = self.ckpt_dir,
+                                  backend = self.backend, training_operator_cls = self.training_operator_cls,
+                                  config = self.config, dataloader_config = self.dataloader_config,
+                                  batch_size = batch_size_per_replica, use_fp16 = self.use_fp16, apex_args = self.apex_args,
+                                  scheduler_step_freq = self.scheduler_step_freq))
             if self.initialization_hook:
                 self.apply_all_workers(self.initialization_hook)
 
             # Compute URL for initializing distributed PyTorch
-            ip = ray.get(self.workers[0].get_node_ip.remote())
-            port = ray.get(self.workers[0].find_free_port.remote())
-            address = "tcp://{ip}:{port}".format(ip = ip, port = port)
+            # ip = ray.get(self.workers[0].get_node_ip.remote())
+            # port = ray.get(self.workers[0].find_free_port.remote())
+            # address = "tcp://{ip}:{port}".format(ip = ip, port = port)
             # Get setup tasks in order to throw errors on failure
-            ray.get([worker.setup.remote(address, i, len(self.workers)) for i, worker in enumerate(self.workers)])
+            ray.get([worker.setup.remote('127.0.0.1', i, len(self.workers)) for i, worker in enumerate(self.workers)])
 
     def train(self, num_steps = None, max_retries = 0, checkpoint = "auto", info = None):
         """Runs a training epoch.
@@ -582,7 +591,7 @@ class TorchTrainable(Trainable):
     @classmethod
     def default_resource_request(cls, config):
         return Resources(cpu = 0, gpu = 0, extra_cpu = config["num_replicas"],
-            extra_gpu = int(config["use_gpu"]) * config["num_replicas"])
+                         extra_gpu = int(config["use_gpu"]) * config["num_replicas"])
 
     def _setup(self, config):
         self._trainer = TorchTrainer(**config)

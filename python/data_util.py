@@ -212,7 +212,7 @@ def h5_worker_init_fn(worker_id):
     ls = ListSharder(worker_info.dataset.files, worker_info.num_workers)
     worker_info.dataset.files = ls.get_shard(worker_info.id)  # shard files only
     random.shuffle(worker_info.dataset.files)
-    print(f"[DATALOADER] STARTING WORKER {worker_id} WITH SHARD OF {len(worker_info.dataset.files)} FILES")
+    # print(f"[DATALOADER] STARTING WORKER {worker_id} WITH SHARD OF {len(worker_info.dataset.files)} FILES")
 
 
 def mk_H5DataLoader(data_dir, batch_size, num_workers):

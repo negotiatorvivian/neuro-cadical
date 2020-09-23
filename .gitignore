@@ -23,7 +23,6 @@ cadical-origin/
 cadical-neuro
 satenv/**/*
 torchscript/
-python/requirements.txt
 .idea/
 .vscode/
 *.cnf
