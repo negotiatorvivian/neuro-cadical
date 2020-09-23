@@ -26,6 +26,7 @@ from util import files_with_extension, recursively_get_files
 def discount_cumsum(x, discount = 1):
     """
     magic from rllab for computing discounted cumulative sums of vectors.
+    计算向量的折现累积和
     input:
     vector x,
       [x0,
@@ -113,7 +114,7 @@ class NeuroAgent(Agent):
 
     def act(self, G):
         p_logits, v_pre_logits = self.model(G)
-        return p_logits.squeeze().detach(), F.sigmoid(v_pre_logits.mean()).detach()
+        return p_logits.squeeze().detach(), torch.sigmoid(v_pre_logits.mean()).detach()
 
     def set_weights(self, model_state_dict):
         self.model.load_state_dict(model_state_dict)
@@ -121,7 +122,7 @@ class NeuroAgent(Agent):
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
     def __init__(self, buf, weight_manager, model_cfg = defaultGNN1Cfg, model_state_dict = None, from_cnf = None,
-            from_file = None, seed = None, sync_freq = 10, restore = True):
+                 from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
         if seed is not None:
@@ -258,7 +259,7 @@ def train_step(model, optim, batcher, Gs, mu_logitss, actions, gs, advs, device 
         log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
 
     p_loss = -(log_probs * psis).mean()
-    vals = F.sigmoid(
+    vals = torch.sigmoid(
         torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
 
     v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
@@ -347,7 +348,7 @@ class WeightManager:
 # let's try single-GPU training for now
 class Learner:
     def __init__(self, buf, weight_manager, batch_size, ckpt_dir, ckpt_freq, lr, restore = True,
-            model_cfg = defaultGNN1Cfg):
+                 model_cfg = defaultGNN1Cfg):
         self.buf = buf
         self.weight_manager = weight_manager
         self.batch_size = batch_size
@@ -397,7 +398,7 @@ class Learner:
     def save_ckpt(self):
         episode_count = ray.get(self.buf.get_episode_count.remote())
         self.weight_manager.save_ckpt.remote(self.model.state_dict(), self.optim.state_dict(), self.save_counter + 1,
-            self.GLOBAL_STEP_COUNT, episode_count = episode_count)
+                                             self.GLOBAL_STEP_COUNT, episode_count = episode_count)
         self.save_counter += 1
 
     def train(self, step_limit = None, time_limit = None, synchronous = False):
@@ -464,7 +465,7 @@ def _main():
 
     try:
         ray.init(address = "auto", redis_password = '5241590000000000') if opts.object_store is None else ray.init(
-            address = "auto", redis_password = '5241590000000000', object_store_memory = int(object_store))
+            address = "auto", redis_password = '5241590000000000', object_store_memory = int(opts.object_store))
     except:
         print("[WARNING] FALLING BACK ON SINGLE MACHINE CLUSTER")
         ray.init()
@@ -495,7 +496,7 @@ def _main():
         completed = 0
         shuffle_environments(workers)
         for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote()),
-                range(opts.eps_per_worker * opts.n_workers)):
+                                    range(opts.eps_per_worker * opts.n_workers)):
             pass
 
         ray.get(learner.train.remote(synchronous = True))

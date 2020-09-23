@@ -55,8 +55,7 @@ def optimizer_creator(model, config):
 
 
 def data_creator(config):
-    return H5Dataset(config["data_dir"],
-        config["batch_size"])  # return CNFDirDataset(config["data_dir"], config["batch_size"])
+    return H5Dataset(config["data_dir"], config["batch_size"])  # return CNFDirDataset(config["data_dir"], config["batch_size"])
 
 
 def loss_creator(config):  # this is just a placeholder, the actual loss function is hardcoded in train_fn
@@ -94,17 +93,18 @@ class GNN1TrainingOperator(TrainingOperator):
             self.index = kwargs.pop("index") if 'index' in kwargs else 0
             self.save_counter = 0
             self.lr = args[0]["lr"]
+            # self._device = torch.device('cuda') if args[0]["use_gpu"] and torch.cuda.is_available() else torch.device('cpu')
         except KeyError:
             raise Exception("DING DONG!")
 
         super(GNN1TrainingOperator, self).__init__(*args, **kwargs)
-        self.batcher = Batcher(device = self._device)
+        self.batcher = Batcher()
         if self.index == 0:
             self.logger = TrainLogger(logdir = args[0].get("logdir"))
-            self.logger.write_log("SOME HYPERPARAMETERS:")
-            for key, value in self.config.items():
-                if key == "lr" or key == "optimizer" or key == "batch_size" or key == "ckpt_freq" or key == "data_dir":
-                    self.logger.write_log(f"{key}: {value}")  # oops
+            # self.logger.write_log("SOME HYPERPARAMETERS:")
+            # for key, value in self.config.items():
+            #     if key == "lr" or key == "optimizer" or key == "batch_size" or key == "ckpt_freq" or key == "data_dir":
+            #         self.logger.write_log(f"{key}: {value}")  # oops
         self.optim = self.optimizers[0]
         try:
             latest = get_latest_ckpt(self.ckpt_dir)
@@ -137,7 +137,7 @@ class GNN1TrainingOperator(TrainingOperator):
             }, ckpt_path)
 
             update_index(ckpt_path)
-            self.logger.write_log(f"[TRAIN LOOP -- HEAD WORKER] SAVED CHECKPOINT TO {ckpt_path}")
+            # self.logger.write_log(f"[TRAIN LOOP -- HEAD WORKER] SAVED CHECKPOINT TO {ckpt_path}")
 
     def train_epoch(self, iterator, info):
         self._losses = AverageMeter()
@@ -173,6 +173,7 @@ class GNN1TrainingOperator(TrainingOperator):
             "batch_count": batch_count, "mean_train_loss": self._losses.avg, "last_train_loss": self._losses.val,
             "epoch_time": self.timers["epoch_time"].last
         }
+        print({timer_tag: timer.mean for timer_tag, timer in self.timers.items()})
         stats.update({timer_tag: timer.mean for timer_tag, timer in self.timers.items()})
         return stats
 
@@ -214,7 +215,7 @@ def parse_config():
     parser.add_argument("--num-replicas", dest = "num_replicas", action = "store", type = int, default = 1)
     parser.add_argument("--use-gpu", dest = "use_gpu", action = "store_true")
     parser.add_argument("--n-data-workers", dest = "n_data_workers", action = "store", type = int, default = 0)
-    parser.add_argument("--n-epochs", dest = "num_epochs", action = "store", type = int, default = 1)
+    parser.add_argument("--n-epochs", dest = "num_epochs", action = "store", type = int, default = 100)
     parser.add_argument("--t0", dest = "t0", action = "store", type = float, default = 1e6)
     opts = parser.parse_args()
     if opts.modelcfg is None:

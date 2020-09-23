@@ -84,8 +84,8 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
     return torch.sparse.FloatTensor(indices = indices, values = values, size = size)
 
 
-def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False,
-        use_NMSDP_to_sparse2 = False, use_glue_counts = True):
+def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = True,
+               use_glue_counts = True):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
     Gs = []
@@ -168,6 +168,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
     # print("EXAMPLE DRAT VAR COUNT", var_lemma_countss[0])
 
     loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
+    print('loss:', loss)
     # loss = drat_loss
     loss.backward()
 
@@ -244,12 +245,14 @@ class TrainLogger:
         check_make_path(self.logdir)
 
     def write_scalar(self, name, value, global_step):
+        print(name, value, global_step)
         self.writer.add_scalar(name, value, global_step)
 
     def write_log(self, *args):
-        with open(self.logfile, "a") as f:
-            print(f"{datetime.datetime.now()}:", *args)
-            print(f"{datetime.datetime.now()}:", *args, file = f)
+        print(f"{datetime.datetime.now()}:", *args)
+        # with open(self.logfile, "a") as f:
+        #     print(f"{datetime.datetime.now()}:", *args)
+        #     print(f"{datetime.datetime.now()}:", *args, file = f)
 
 
 class Trainer:
@@ -278,9 +281,7 @@ class Trainer:
         self.n_steps = None if n_steps == -1 else n_steps
         self.n_epochs = 1 if n_epochs == -1 else n_epochs
         self.CUDA_FLAG = torch.cuda.is_available()
-        # self.device = torch.device(f"cuda:{index}" if self.CUDA_FLAG else "cpu")
         self.device = torch.device("cuda" if self.CUDA_FLAG else "cpu")
-        print("CUDA FLAG", self.CUDA_FLAG)
         self.model.to(self.device)
         self.lr = lr
         self.optimizer = optim.Adam(self.model.parameters(), lr = self.lr, betas = (0.9, 0.98))
@@ -344,17 +345,17 @@ class Trainer:
             cfg_dict = {"latest": ckpt_path}
             f.write(json.dumps(cfg_dict, indent = 2))
 
-    def maybe_save_ckpt(self, GLOBAL_STEP_COUNT, force_save = False):
+    def maybe_save_ckpt(self, GLOBAL_STEP_COUNT, type = "best", force_save = False):
         """
         Saves the model if GLOBAL_STEP_COUNT is at the ckpt_freq.
 
         Returns a bit indicating whether or not the model was saved.
         """
         if (int(GLOBAL_STEP_COUNT) % self.ckpt_freq == 0) or force_save:
-            ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{self.save_counter}.pth")
+            ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{type}.pth")
             self.save_model(self.model, self.optimizer, ckpt_path)
             self.update_index(ckpt_path)
-            self.logger.write_log(f"[TRAIN LOOP] Wrote checkpoint to {ckpt_path}.")
+            self.logger.write_log(f"[TRAIN LOOP]{GLOBAL_STEP_COUNT} Wrote checkpoint to {ckpt_path}.")
             self.save_counter += 1
             return True
         return False
@@ -373,25 +374,29 @@ class Trainer:
         saved = False
         for epoch_count in range(self.n_epochs):
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
+            min_loss = np.zeros(1)
             for nmsdps in self.dataset:
                 drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
-                    self.optimizer, nmsdps, device = self.device, CUDA_FLAG = self.CUDA_FLAG,
-                    use_NMSDP_to_sparse2 = True)
-
-                self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
-                self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
-                self.logger.write_scalar("core_clause_loss", core_clause_loss, self.GLOBAL_STEP_COUNT)
-                self.logger.write_scalar("total_loss", loss, self.GLOBAL_STEP_COUNT)
-                self.logger.write_scalar("LAST GRAD NORM", grad_norm, self.GLOBAL_STEP_COUNT)
-                self.logger.write_scalar("l2_loss", l2_loss, self.GLOBAL_STEP_COUNT)
-                self.logger.write_log(f"[TRAIN LOOP] Finished global step {self.GLOBAL_STEP_COUNT}. Loss: {loss}.")
+                                                                                              self.optimizer, nmsdps, device = self.device,
+                                                                                              CUDA_FLAG = self.CUDA_FLAG,
+                                                                                              use_NMSDP_to_sparse2 = True)
+                if epoch_count % 10 == 0 and self.GLOBAL_STEP_COUNT % 10 == 0:
+                    self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
+                    self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
+                    self.logger.write_scalar("core_clause_loss", core_clause_loss, self.GLOBAL_STEP_COUNT)
+                    self.logger.write_scalar("total_loss", loss, self.GLOBAL_STEP_COUNT)
+                    self.logger.write_scalar("LAST GRAD NORM", grad_norm, self.GLOBAL_STEP_COUNT)
+                    self.logger.write_scalar("l2_loss", l2_loss, self.GLOBAL_STEP_COUNT)
+                    self.logger.write_log(f"[TRAIN LOOP] Finished global step {self.GLOBAL_STEP_COUNT}. Loss: {loss}.")
                 self.GLOBAL_STEP_COUNT += 1
-                saved = self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT)
+                if min_loss == 0 or min_loss > loss.detach().cpu().numpy():
+                    saved = self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT)
+                    min_loss = loss.detach().cpu().numpy()
                 if self.n_steps is not None:
                     if self.GLOBAL_STEP_COUNT >= self.n_steps:
                         break
         if not saved:
-            self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT, force_save = True)  # save at the end of every epoch regardless
+            self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT, "last", force_save = True)  # save at the end of every epoch regardless
 
 
 # def gen_nmsdp_batch(k):
@@ -415,9 +420,9 @@ def _parse_main():
     parser.add_argument("--batch-size", type = int, dest = "batch_size", action = "store")
     parser.add_argument("--n-data-workers", type = int, dest = "n_data_workers", action = "store")
     parser.add_argument("--ckpt-dir", type = str, dest = "ckpt_dir", action = "store")
-    parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store", default = 10)
+    parser.add_argument("--ckpt-freq", type = int, dest = "ckpt_freq", action = "store", default = 30)
     parser.add_argument("--n-steps", type = int, dest = "n_steps", action = "store", default = -1)
-    parser.add_argument("--n-epochs", type = int, dest = "n_epochs", action = "store", default = -1)
+    parser.add_argument("--n-epochs", type = int, dest = "n_epochs", action = "store", default = 100)
     parser.add_argument("--forever", action = "store_true")
     parser.add_argument("--index", action = "store", default = 0, type = int)
     opts = parser.parse_args()
@@ -438,7 +443,6 @@ def _main_train1(cfg = None, opts = None):
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
-    # pocessor = CNFProcessor(dataset, timeout = 30)
     trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
         n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
