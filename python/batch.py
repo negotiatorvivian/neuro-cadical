@@ -43,6 +43,13 @@ class Batcher:
             sizes = get_dims(Gs)
             self.x_dims = sizes[0]
             self.y_dims = sizes[1]
+        clause_values = []
+
+        for i, g in enumerate(Gs):
+            lits = g._indices()[1]
+            clauses = g._indices()[0]
+            for k in range(self.x_dims.numpy()[i]):
+                clause_values.append(int(np.any((lits[clauses == k] < self.y_dims.numpy()[i]/2).numpy())))
 
         shifts = torch.cat([torch.tensor([[0], [0]], dtype = torch.int32), sizes[:, :-1]], axis = 1)
         shifts = torch.cumsum(shifts, dim = 1)
@@ -54,7 +61,7 @@ class Batcher:
         values = torch.cat([G.coalesce().values().to(indices.device) for G in Gs])
         size = torch.sum(torch.stack([torch.tensor(G.size(), dtype = torch.int32) for G in Gs]), axis = 0)
 
-        return torch.sparse.FloatTensor(indices = indices, values = values, size = list(size)).to(self.device)
+        return torch.sparse.FloatTensor(indices = indices, values = values, size = list(size)).to(self.device), clause_values
 
     def unbatch(self, z, mode = None):
         try:

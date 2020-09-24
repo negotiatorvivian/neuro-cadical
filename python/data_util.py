@@ -19,7 +19,7 @@ NMSDP = collections.namedtuple(  # all fields besides dp_id must be numpy arrays
               "var_lemma_counts"])
 
 LBDP = collections.namedtuple(  # all fields besides dp_id must be numpy arrays
-    "LBDP", ["dp_id", "is_train", "n_vars", "n_clauses", "C_idxs", "L_idxs", "glue_counts"])
+    "LBDP", ["dp_id", "is_train", "n_vars", "n_clauses", "C_idxs", "L_idxs", "clause_values", "glue_counts"])
 
 
 def serialize_lbdp(lbdp, f):
@@ -29,7 +29,7 @@ def serialize_lbdp(lbdp, f):
 def deserialize_lbdp(grp, dp_id):
     return LBDP(dp_id = dp_id, is_train = grp["is_train"][()], n_vars = grp["n_vars"][()],
         n_clauses = grp["n_clauses"][()], C_idxs = grp["C_idxs"][()], L_idxs = grp["L_idxs"][()],
-        glue_counts = grp["glue_counts"][()])
+        clause_values = grp["clause_values"][()], glue_counts = grp["glue_counts"][()])
 
 
 def serialize_nmsdp(nmsdp, f):
@@ -211,8 +211,8 @@ def h5_worker_init_fn(worker_id):
     worker_info = td.get_worker_info()
     ls = ListSharder(worker_info.dataset.files, worker_info.num_workers)
     worker_info.dataset.files = ls.get_shard(worker_info.id)  # shard files only
-    random.shuffle(worker_info.dataset.files)
-    # print(f"[DATALOADER] STARTING WORKER {worker_id} WITH SHARD OF {len(worker_info.dataset.files)} FILES")
+    random.shuffle(
+        worker_info.dataset.files)  # print(f"[DATALOADER] STARTING WORKER {worker_id} WITH SHARD OF {len(worker_info.dataset.files)} FILES")
 
 
 def mk_H5DataLoader(data_dir, batch_size, num_workers):

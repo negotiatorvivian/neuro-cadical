@@ -91,9 +91,7 @@ class CNFDirDataset:
                 cnfs.append(cnf)
             return cnfs
         except IndexError:
-            raise StopIteration
-        # self.file_index += 1
-        # return gen_lbdp(td, cnf)
+            raise StopIteration  # self.file_index += 1  # return gen_lbdp(td, cnf)
 
 
 class Logger:
@@ -131,16 +129,19 @@ def coo(fmla):
   """
     C_result = []
     L_result = []
+    clause_values = [0] * len(fmla.clauses)
     for cls_idx in range(len(fmla.clauses)):
         for lit in fmla.clauses[cls_idx]:
             if lit > 0:
+                clause_values[cls_idx] = 1
                 lit_enc = lit - 1
             else:
                 lit_enc = fmla.nv + abs(lit) - 1
 
             C_result.append(cls_idx)
             L_result.append(lit_enc)
-    return np.array(C_result, dtype = "int32"), np.array(L_result, dtype = "int32")
+    return np.array(C_result, dtype = "int32"), np.array(L_result, dtype = "int32"), np.array(clause_values,
+        dtype = "int32")
 
 
 def lbdcdl(cnf_dir, cnf, llpath, dump_dir = None, dumpfreq = 50e3, timeout = None, clause_limit = 1e6):
@@ -183,12 +184,13 @@ def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dum
             for idx, line in enumerate(f):
                 counts[idx] = int(line.split()[1])
 
-    C_idxs, L_idxs = coo(fmla)
+    C_idxs, L_idxs, clause_values = coo(fmla)
     n_clauses = len(fmla.clauses)
 
     lbdp = LBDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
         n_vars = np.array([n_vars], dtype = "int32"), n_clauses = np.array([n_clauses], dtype = "int32"),
-        C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), glue_counts = counts)
+        C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), clause_values = np.array(clause_values),
+        glue_counts = counts)
 
     return lbdp
 
@@ -253,4 +255,3 @@ if __name__ == "__main__":
         for ldbp in processor:
             print(ldbp.dp_id)
             serialize_lbdp(ldbp, f)
-

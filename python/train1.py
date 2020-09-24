@@ -10,7 +10,7 @@ import multiprocessing
 import time
 import torch.multiprocessing as mp
 
-from python.util import check_make_path, files_with_extension
+from python.util import check_make_path, files_with_extension, load_data
 from python.gnn import *
 from python.batch import Batcher
 from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
@@ -126,7 +126,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
                 Gs.append(maybe_non_blocking(NMSDP_to_sparse2(nmsdp)))
                 glue_countss.append(maybe_non_blocking(nmsdp.glue_counts.type(torch.float32)[0]).to(device))
 
-    G = batcher(Gs)
+    G, clause_values = batcher(Gs)
     G.to(device)
     batched_V_drat_logits, batched_V_core_logits, batched_C_core_logits = (
         lambda x: (x[0].view([x[0].size(0)]), x[1].view([x[1].size(0)]), x[2].view([x[2].size(0)])))(model(G))
