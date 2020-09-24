@@ -37,10 +37,12 @@ def discount_cumsum(x, discount = 1):
        x1 + discount * x2,
        x2]
     """
+    # print(x)
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis = 0)[::-1]
 
 
 def mk_G(CL_idxs):
+    # print(CL_idxs.C_idxs, CL_idxs.L_idxs)
     C_idxs = np.array(CL_idxs.C_idxs, dtype = "int32")
     L_idxs = np.array(CL_idxs.L_idxs, dtype = "int32")
     indices = torch.stack([torch.as_tensor(C_idxs).to(torch.long), torch.as_tensor(L_idxs).to(torch.long)])
@@ -199,6 +201,7 @@ class ReplayBuffer:
 
     def ingest_trajectory(self, tau):
         Gs, mu_logitss, actions, gs, advs, total_return = tau
+        # print(gs)
         self.writer.add_scalar("total return", total_return, self.episode_count)
         for G, mu_logits, action, g, adv in zip(Gs, mu_logitss, actions, gs, advs):
             self.queue.put((G, mu_logits, action, g, adv))
@@ -225,6 +228,7 @@ class ReplayBuffer:
                 actions.append(action)
                 gs.append(g)
                 advs.append(adv)
+                # print(action, adv)
             return Gs, mu_logitss, actions, gs, advs
 
 
@@ -471,7 +475,7 @@ def _main():
         ray.init()
 
     buf = ray.remote(ReplayBuffer).remote(logdir = opts.ckpt_dir)
-    weight_manager = ray.remote(num_gpus = (1 if torch.cuda.is_available() else 0))(WeightManager).remote(
+    weight_manager = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(WeightManager).remote(
         ckpt_dir = opts.ckpt_dir)
 
     if opts.model_cfg is not None:
@@ -480,10 +484,10 @@ def _main():
     else:
         model_cfg = defaultGNN1Cfg
 
-    learner = ray.remote(num_gpus = (1 if torch.cuda.is_available() else 0))(Learner).remote(buf = buf,
+    learner = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(Learner).remote(buf = buf,
                                                                                              weight_manager = weight_manager,
                                                                                              batch_size = opts.batch_size, ckpt_freq = opts.ckpt_freq,
-                                                                                             ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = True,
+                                                                                             ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = False,
                                                                                              model_cfg = model_cfg)  # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
     workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, model_cfg = model_cfg) for _
                in range(opts.n_workers)]
