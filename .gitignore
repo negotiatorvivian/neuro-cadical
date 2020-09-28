@@ -16,11 +16,11 @@
 /paper/clean.sh
 /250000
 /Pipfile
-data/
+data/**/*
 cgen/
 cadical/**/*
 cadical-origin/
-cadical-neuro
+cadical
 satenv/**/*
 torchscript/
 .idea/

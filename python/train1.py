@@ -10,7 +10,7 @@ import multiprocessing
 import time
 import torch.multiprocessing as mp
 
-from python.util import check_make_path, files_with_extension
+from python.util import check_make_path, files_with_extension, load_data
 from python.gnn import *
 from python.batch import Batcher
 from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
@@ -35,7 +35,7 @@ def compute_softmax_kldiv_loss(logitss, probss):
         # print(logits.size())
         logits = F.log_softmax(logits, dim = 0)  # must be log-probabilities
         cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]),
-                      reduction = "sum")
+            reduction = "sum")
         # print("CL", cl)
         result += cl  # result += F.kl_div(logits, probs, reduction="none")
     result = result / float(len(probss))
@@ -126,7 +126,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
                 Gs.append(maybe_non_blocking(NMSDP_to_sparse2(nmsdp)))
                 glue_countss.append(maybe_non_blocking(nmsdp.glue_counts.type(torch.float32)[0]).to(device))
 
-    G = batcher(Gs)
+    G, clause_values = batcher(Gs)
     G.to(device)
     batched_V_drat_logits, batched_V_core_logits, batched_C_core_logits = (
         lambda x: (x[0].view([x[0].size(0)]), x[1].view([x[1].size(0)]), x[2].view([x[2].size(0)])))(model(G))
@@ -186,7 +186,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
             num_g_nonzero_entries = torch.nonzero(g).size(0)
             if not num_g_entries == num_g_nonzero_entries:
                 print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g,
-                      "AHHHHHHHH")
+                    "AHHHHHHHH")
         except AttributeError:
             pass
 
@@ -270,7 +270,7 @@ class Trainer:
     """
 
     def __init__(self, model, dataset, lr, ckpt_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
-                 index = 0):
+            index = 0):
         self.model = model
         self.dataset = dataset
         self.ckpt_dir = ckpt_dir
@@ -444,7 +444,7 @@ def _main_train1(cfg = None, opts = None):
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
     trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
-                      n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
+        n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
         while True:
@@ -460,7 +460,7 @@ def _test_trainer(opts = None):
     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
     trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
-                      n_steps = opts.n_steps)
+        n_steps = opts.n_steps)
     for _ in range(5):
         trainer.train()  # trainer.load_latest_ckpt()
 

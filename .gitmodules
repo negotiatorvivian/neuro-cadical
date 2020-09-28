@@ -8,3 +8,5 @@
 [submodule "cadical"]
 	path = cadical
 	url = https://www.github.com/jesse-michael-han/cadical/
+[submodule "data"]
+    path = data
