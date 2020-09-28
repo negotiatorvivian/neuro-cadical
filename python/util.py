@@ -61,7 +61,7 @@ def get_adj_list(G):
 
 def load_data(G, clause_values, batch_size = 256):
     adj_list, node_lists = get_adj_list(G)
-    print(adj_list, node_lists, clause_values)
+    # print(adj_list, node_lists, clause_values)
     [clause_size, num_nodes] = G.size()
     rand_indices = np.random.permutation(num_nodes)
     train_nodes = list(rand_indices)

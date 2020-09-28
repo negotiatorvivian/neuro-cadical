@@ -38,10 +38,12 @@ def discount_cumsum(x, discount = 1):
        x1 + discount * x2,
        x2]
     """
+    # print(x)
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis = 0)[::-1]
 
 
 def mk_G(CL_idxs):
+    # print(CL_idxs.C_idxs, CL_idxs.L_idxs)
     C_idxs = np.array(CL_idxs.C_idxs, dtype = "int32")
     L_idxs = np.array(CL_idxs.L_idxs, dtype = "int32")
     indices = torch.stack([torch.as_tensor(C_idxs).to(torch.long), torch.as_tensor(L_idxs).to(torch.long)])
@@ -67,7 +69,7 @@ def sample_trajectory(agent, env):
 
     CL_idxs = env.render()
     terminal_flag = False
-    while (not terminal_flag):
+    while not terminal_flag:
         G = mk_G(CL_idxs)
         mu_logits, value_estimate = agent.act(G)
         action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
@@ -123,7 +125,7 @@ class NeuroAgent(Agent):
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
     def __init__(self, buf, weight_manager, model_cfg = defaultGNN1Cfg, model_state_dict = None, from_cnf = None,
-            from_file = None, seed = None, sync_freq = 10, restore = True):
+                 from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
         if seed is not None:
@@ -200,6 +202,7 @@ class ReplayBuffer:
 
     def ingest_trajectory(self, tau):
         Gs, mu_logitss, actions, gs, advs, total_return = tau
+        # print(gs)
         self.writer.add_scalar("total return", total_return, self.episode_count)
         for G, mu_logits, action, g, adv in zip(Gs, mu_logitss, actions, gs, advs):
             self.queue.put((G, mu_logits, action, g, adv))
@@ -226,11 +229,12 @@ class ReplayBuffer:
                 actions.append(action)
                 gs.append(g)
                 advs.append(adv)
+                # print(action, adv)
             return Gs, mu_logitss, actions, gs, advs
 
 
 def train_step(graphsage, model, optim, batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs, advs,
-        device = torch.device("cpu")):
+               device = torch.device("cpu")):
     """
     Calculate loss and perform a single gradient update. Returns a dictionary of statistics.
 
@@ -246,6 +250,7 @@ def train_step(graphsage, model, optim, batcher, G, batch_size, nodes, labels, m
     # G = batcher.batch(Gs)
 
     agg_loss = graphsage(nodes, labels)
+    print(agg_loss)
     pre_policy_logitss, pre_unreduced_value_logitss = model(G)
     policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
     actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
@@ -352,7 +357,7 @@ class WeightManager:
 # let's try single-GPU training for now
 class Learner:
     def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, ckpt_dir, ckpt_freq, lr,
-            restore = True, model_cfg = defaultGNN1Cfg):
+                 restore = True, model_cfg = defaultGNN1Cfg):
         self.encode_dim = encode_dim
         self.feature_dim = feature_dim
         self.num_samples = num_samples
@@ -390,15 +395,16 @@ class Learner:
         G, clause_values = self.batcher.batch(Gs)
         x_dim = G.size()[0]
         y_dim = G.size()[1]
+        print(G.size())
         features = nn.Embedding(x_dim, y_dim)
-        features.weight = nn.Parameter(torch.FloatTensor(G.to_dense()), requires_grad = False)
-        adj_lists, nodes, labels = load_data(G, clause_values)
+        features.weight = nn.Parameter(torch.FloatTensor(G.cpu().to_dense()), requires_grad = False)
+        adj_lists, node_lists, nodes, clauses, labels = load_data(G, clause_values)
 
         agg1 = MeanAggregator(features, cuda = True)
         enc1 = Encoder(features, x_dim, self.encode_dim, adj_lists, agg1, gcn = True, cuda = False)
         agg2 = MeanAggregator(lambda nodes: enc1(nodes).t(), cuda = False)
         enc2 = Encoder(lambda nodes: enc1(nodes).t(), enc1.embed_dim, self.encode_dim, adj_lists, agg2,
-            base_model = enc1, gcn = True, cuda = False)
+                       base_model = enc1, gcn = True, cuda = False)
         enc1.num_samples = self.num_samples
         enc2.num_samples = self.num_samples
         graphsage = SupervisedGraphSage(self.feature_dim, enc2)
@@ -408,7 +414,7 @@ class Learner:
             [{'params': filter(lambda p: p.requires_grad, model.parameters())} for model in self.model_list],
             lr = self.lr)
         stats = train_step(graphsage, self.model, self.optim, self.batcher, G, nodes, labels, mu_logitss, actions, gs,
-            advs, batch_size, device = self.device)
+                           advs, batch_size, device = self.device)
         self.write_stats(stats)
 
     def sync_weights(self, w):
@@ -428,7 +434,7 @@ class Learner:
     def save_ckpt(self):
         episode_count = ray.get(self.buf.get_episode_count.remote())
         self.weight_manager.save_ckpt.remote(self.model.state_dict(), self.optim.state_dict(), self.save_counter + 1,
-            self.GLOBAL_STEP_COUNT, episode_count = episode_count)
+                                             self.GLOBAL_STEP_COUNT, episode_count = episode_count)
         self.save_counter += 1
 
     def train(self, step_limit = None, time_limit = None, synchronous = False):
@@ -466,7 +472,8 @@ class Learner:
                     self.save_ckpt()
         finally:
             print("Finishing up and saving checkpoint.")
-            self.save_ckpt()
+            if self.optim:
+                self.save_ckpt()
 
 
 def _parse_main():
@@ -504,7 +511,7 @@ def _main():
         ray.init()
 
     buf = ray.remote(ReplayBuffer).remote(logdir = opts.ckpt_dir)
-    weight_manager = ray.remote(num_gpus = (1 if torch.cuda.is_available() else 0))(WeightManager).remote(
+    weight_manager = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(WeightManager).remote(
         ckpt_dir = opts.ckpt_dir)
 
     if opts.model_cfg is not None:
@@ -513,7 +520,7 @@ def _main():
     else:
         model_cfg = defaultGNN1Cfg
 
-    learner = ray.remote(num_gpus = (1 if torch.cuda.is_available() else 0))(Learner).remote(
+    learner = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(Learner).remote(
         encode_dim = opts.encode_dim, feature_dim = opts.feature_dim, num_samples = opts.num_samples, buf = buf,
         weight_manager = weight_manager, batch_size = opts.batch_size, ckpt_freq = opts.ckpt_freq,
         ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = False,
@@ -531,7 +538,7 @@ def _main():
         completed = 0
         shuffle_environments(workers)
         for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote()),
-                range(opts.eps_per_worker * opts.n_workers)):
+                                    range(opts.eps_per_worker * opts.n_workers)):
             pass
 
         ray.get(learner.train.remote(synchronous = True))
