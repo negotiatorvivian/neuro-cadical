@@ -41,7 +41,7 @@ def recursively_get_files(folder, exts, forbidden = []):
     return files
 
 
-def get_adj_list(G, device):
+def get_adj_list(G):
     clause_size = G.size()[0]
     variables = G.size()[1]
     indices = G._indices()
@@ -49,18 +49,18 @@ def get_adj_list(G, device):
     adj_lists = defaultdict(list)
     node_lists = defaultdict(list)
     for j in range(clause_size):
-        nodes = indices[0][indices[1] == i]
+        nodes = indices[0][indices[1] == j].cpu().numpy()
         for i, v in enumerate(nodes):
             for k in nodes:
                 node_lists[i].append(k)
                 if k == v:
                     continue
-            adj_lists[v].append(k)
+                adj_lists[v].append(k)
     return adj_lists, node_lists
 
 
-def load_data(G, clause_values, device, batch_size = 256):
-    adj_list, node_lists = get_adj_list(G, device)
+def load_data(G, clause_values, batch_size = 256):
+    adj_list, node_lists = get_adj_list(G)
     print(adj_list, node_lists, clause_values)
     [clause_size, num_nodes] = G.size()
     rand_indices = np.random.permutation(num_nodes)

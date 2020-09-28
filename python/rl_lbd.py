@@ -391,8 +391,8 @@ class Learner:
         x_dim = G.size()[0]
         y_dim = G.size()[1]
         features = nn.Embedding(x_dim, y_dim)
-        features.weight = nn.Parameter(torch.FloatTensor(G), requires_grad = False)
-        adj_lists, nodes, labels = load_data(G, clause_values, self.device)
+        features.weight = nn.Parameter(torch.FloatTensor(G.to_dense()), requires_grad = False)
+        adj_lists, nodes, labels = load_data(G, clause_values)
 
         agg1 = MeanAggregator(features, cuda = True)
         enc1 = Encoder(features, x_dim, self.encode_dim, adj_lists, agg1, gcn = True, cuda = False)
@@ -482,7 +482,7 @@ def _parse_main():
     parser.add_argument("--lr", dest = "lr", type = float, action = "store", default = 1e-4)
     parser.add_argument("--ckpt-dir", dest = "ckpt_dir", action = "store")
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
-    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 32)
+    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 1)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
     parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 25, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
