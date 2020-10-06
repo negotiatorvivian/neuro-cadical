@@ -22,6 +22,7 @@ from batch import Batcher
 from util import files_with_extension, recursively_get_files, load_data
 from aggregators import Encoder, MeanAggregator, SupervisedGraphSage
 from base import PropagatorSolverBase
+from train1 import TrainLogger
 
 
 def discount_cumsum(x, discount = 1):
@@ -57,7 +58,7 @@ def softmax_sample_from_logits(logits):
     return int(torch.multinomial(probs, 1)[0])
 
 
-def sample_trajectory(agent, env):
+def sample_trajectory(agent, env, logger):
     """
     Samples a trajectory from the environment and then resets it. This assumes the environment has been initialized.
     """
@@ -79,15 +80,16 @@ def sample_trajectory(agent, env):
         actions.append(action)
         rewards.append(reward)
         value_estimates.append(value_estimate)
-
+    logger.write_log(f"C_idxs: {CL_idxs.C_idxs}, actions: {actions}")
     env.reset()
     return Gs, mu_logitss, actions, rewards, value_estimates
 
 
 def process_trajectory(Gs, mu_logitss, actions, rewards, vals, last_val = 0, gam = 1.0, lam = 1.0):
-    gs = discount_cumsum(rewards, gam)
+    gs = discount_cumsum(rewards, int(gam))
+    print(rewards, vals)
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[:-1]
-    adv = discount_cumsum(deltas, gam * lam)
+    adv = discount_cumsum(deltas, int(gam * lam))
     return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0]  # note, gs[0] is total value
 
 
@@ -124,10 +126,11 @@ class NeuroAgent(Agent):
 
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
-    def __init__(self, buf, weight_manager, model_cfg = defaultGNN1Cfg, model_state_dict = None, from_cnf = None,
+    def __init__(self, buf, weight_manager, logdir, model_cfg = defaultGNN1Cfg, model_state_dict = None, from_cnf = None,
                  from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
+        self.logger = TrainLogger(logdir = logdir)
         if seed is not None:
             torch.manual_seed(seed)
             np.random.seed(seed)
@@ -161,11 +164,11 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             raise Exception("must set env with CNF or file")
 
     def sample_trajectory(self):
-        tau = sample_trajectory(self.agent, self.env)
+        tau = sample_trajectory(self.agent, self.env, self.logger)
         self.buf.ingest_trajectory.remote(process_trajectory(*tau))
         print(f"SAMPLED TRAJECTORY OF LENGTH {len(tau[0])}")
         self.trajectory_count += 1
-        if self.trajectory_count % self.sync_freq:
+        if self.trajectory_count % self.sync_freq == 0:
             self.try_update_weights()
 
     def set_weights(self, model_state_dict, new_rank):
@@ -186,10 +189,13 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
 
 
 class ReplayBuffer:
-    def __init__(self, logdir, limit = 100000):
-        self.logdir = logdir
+    def __init__(self, root_dir, limit = 100000):
+        self.root_dir = root_dir
+        self.logdir = os.path.join(self.root_dir, "logs/")
+        self.ckpt_dir = os.path.join(self.logdir, "returns/")
         self.episode_count = 0
-        self.writer = SummaryWriter(log_dir = os.path.join(self.logdir, "returns/"))
+        self.writer = SummaryWriter(log_dir = self.logdir)
+        self.logger = TrainLogger(logdir = self.logdir)
         self.queue = queue.Queue()
         self.sample_count = 0
         self.limit = limit
@@ -229,7 +235,7 @@ class ReplayBuffer:
                 actions.append(action)
                 gs.append(g)
                 advs.append(adv)
-                # print(action, adv)
+                self.logger.write_log(f'action:{action}, g:{g}, adv:{adv}')
             return Gs, mu_logitss, actions, gs, advs
 
 
@@ -246,11 +252,10 @@ def train_step(graphsage, model, optim, batcher, G, batch_size, nodes, labels, m
     gs: list of returns
     advs: list of advantages
     """
-    # batch_size = len(Gs)
-    # G = batcher.batch(Gs)
-
-    agg_loss = graphsage(nodes, labels)
-    print(agg_loss)
+    # print(nodes, labels)
+    agg_loss = None
+    if graphsage is not None:
+        agg_loss = graphsage.loss(nodes, labels)
     pre_policy_logitss, pre_unreduced_value_logitss = model(G)
     policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
     actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
@@ -272,9 +277,12 @@ def train_step(graphsage, model, optim, batcher, G, batch_size, nodes, labels, m
         torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
 
     v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
-    loss = p_loss + 0.1 * v_loss + agg_loss
+    loss = p_loss + 0.1 * v_loss
+    if agg_loss:
+        loss += agg_loss
 
     loss.backward()
+    print('total_loss', loss.detach().cpu().numpy())
 
     nn.utils.clip_grad_value_(model.parameters(), 100)
     nn.utils.clip_grad_norm_(model.parameters(), 10)
@@ -339,24 +347,24 @@ class WeightManager:
             cfg_dict = {"latest": ckpt_path}
             f.write(json.dumps(cfg_dict, indent = 2))
 
-    def save_ckpt(self, model_state_dict, optim_state_dict, save_counter, GLOBAL_STEP_COUNT, episode_count):
+    def save_ckpt(self, model_state_dict, optim_state_dict, save_counter, GLOBAL_STEP_COUNT, episode_count, name = 'best'):
         self.model_state_dict = model_state_dict
         self.optim_state_dict = optim_state_dict
         self.save_counter = save_counter
         self.GLOBAL_STEP_COUNT = GLOBAL_STEP_COUNT
-        ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{self.save_counter}.pth")
+        ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{name}.pth")
         torch.save({
             "model_state_dict": model_state_dict, "optim_state_dict": optim_state_dict, "save_counter": save_counter,
             "GLOBAL_STEP_COUNT": GLOBAL_STEP_COUNT, "episode_count": episode_count
         }, ckpt_path)
         self.update_index(ckpt_path)
-        print(f"SAVED CHECKPOINT TO {ckpt_path}")
-        print(f"GLOBAL_STEP_COUNT: {GLOBAL_STEP_COUNT}\nEPISODE_COUNT: {episode_count}")
+        # print(f"SAVED CHECKPOINT TO ckpt_{name}.pth")
+        # print(f"GLOBAL_STEP_COUNT: {GLOBAL_STEP_COUNT}\nEPISODE_COUNT: {episode_count}")
 
 
 # let's try single-GPU training for now
 class Learner:
-    def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, ckpt_dir, ckpt_freq, lr,
+    def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, log_dir, ckpt_dir, ckpt_freq, lr,
                  restore = True, model_cfg = defaultGNN1Cfg):
         self.encode_dim = encode_dim
         self.feature_dim = feature_dim
@@ -365,14 +373,15 @@ class Learner:
         self.weight_manager = weight_manager
         self.batch_size = batch_size
         self.ckpt_dir = ckpt_dir
-        self.logdir = self.ckpt_dir
+        self.logdir = log_dir
         self.ckpt_freq = ckpt_freq
         self.lr = lr
         self.writer = SummaryWriter(log_dir = self.ckpt_dir)
+        self.logger = TrainLogger(logdir = self.logdir)
         self.GLOBAL_STEP_COUNT = 0
         self.save_counter = 0
         self.model = GNN1(**model_cfg)
-        # self.model_list = [self.model]
+        self.optim = torch.optim.Adam(self.model.parameters(), lr = self.lr)
         if torch.cuda.is_available():
             print("[LEARNER] USING GPU")
             self.device = torch.device("cuda")
@@ -387,35 +396,39 @@ class Learner:
 
     def write_stats(self, stats):
         for name, value in stats.items():
-            print(name, value)
+            # print(name, value)
+            self.writer.add_text(name, str(value), self.GLOBAL_STEP_COUNT)
             self.writer.add_scalar(name, value, self.GLOBAL_STEP_COUNT)
 
     def train_batch(self, Gs, mu_logitss, actions, gs, advs):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
-        x_dim = G.size()[0]
-        y_dim = G.size()[1]
-        print(G.size())
-        features = nn.Embedding(x_dim, y_dim)
-        features.weight = nn.Parameter(torch.FloatTensor(G.cpu().to_dense()), requires_grad = False)
-        adj_lists, node_lists, nodes, clauses, labels = load_data(G, clause_values)
-
-        agg1 = MeanAggregator(features, cuda = True)
-        enc1 = Encoder(features, x_dim, self.encode_dim, adj_lists, agg1, gcn = True, cuda = False)
-        agg2 = MeanAggregator(lambda nodes: enc1(nodes).t(), cuda = False)
-        enc2 = Encoder(lambda nodes: enc1(nodes).t(), enc1.embed_dim, self.encode_dim, adj_lists, agg2,
-                       base_model = enc1, gcn = True, cuda = False)
-        enc1.num_samples = self.num_samples
-        enc2.num_samples = self.num_samples
-        graphsage = SupervisedGraphSage(self.feature_dim, enc2)
-        self.model_list = [PropagatorSolverBase(graphsage, self.model, self.device)]
-        self.model_list = [model._set_device() for model in self.model_list]
-        self.optim = torch.optim.Adam(
-            [{'params': filter(lambda p: p.requires_grad, model.parameters())} for model in self.model_list],
-            lr = self.lr)
-        stats = train_step(graphsage, self.model, self.optim, self.batcher, G, nodes, labels, mu_logitss, actions, gs,
-                           advs, batch_size, device = self.device)
+        self.logger.write_log(f"G: {G.size()}")
+        # x_dim = G.size()[0]
+        # y_dim = G.size()[1]
+        # features = nn.Embedding(x_dim, y_dim)
+        # features.weight = nn.Parameter(torch.FloatTensor(G.to_dense()), requires_grad = False)
+        # adj_lists, node_lists, nodes, clauses, labels = load_data(G, clause_values)
+        #
+        # agg1 = MeanAggregator(features, cuda = True)
+        # enc1 = Encoder(features, y_dim, self.encode_dim, adj_lists, agg1, gcn = True, cuda = False)
+        # agg2 = MeanAggregator(lambda nodes: enc1(nodes).t(), cuda = False)
+        # enc2 = Encoder(lambda nodes: enc1(nodes).t(), enc1.embed_dim, self.encode_dim, adj_lists, agg2,
+        #                base_model = enc1, gcn = True, cuda = False)
+        # enc1.num_samples = self.num_samples
+        # enc2.num_samples = self.num_samples
+        # graphsage = SupervisedGraphSage(self.feature_dim, enc2)
+        # self.model_list = [PropagatorSolverBase(graphsage, self.model, self.device)]
+        # self.model_list = [model._set_device() for model in self.model_list]
+        # self.optim = torch.optim.Adam(
+        #     [{'params': filter(lambda p: p.requires_grad, model.parameters())} for model in self.model_list],
+        #     lr = self.lr)
+        # stats = train_step(graphsage, self.model, self.optim, self.batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs,
+        #                    advs, device = self.device)
+        stats = train_step(None, self.model, self.optim, self.batcher, G, batch_size, None, None, mu_logitss, actions, gs,
+            advs, device = self.device)
         self.write_stats(stats)
+        return stats.get('p_loss') + stats.get('v_loss')
 
     def sync_weights(self, w):
         w.set_weights.remote(self.get_weights())
@@ -431,15 +444,17 @@ class Learner:
         self.save_counter = ckpt["save_counter"]
         ray.get(self.buf.set_episode_count.remote(ckpt["episode_count"]))
 
-    def save_ckpt(self):
+    def save_ckpt(self, best = False):
         episode_count = ray.get(self.buf.get_episode_count.remote())
+        name = 'best' if best else 'last'
         self.weight_manager.save_ckpt.remote(self.model.state_dict(), self.optim.state_dict(), self.save_counter + 1,
-                                             self.GLOBAL_STEP_COUNT, episode_count = episode_count)
+            self.GLOBAL_STEP_COUNT, episode_count = episode_count, name = name)
         self.save_counter += 1
 
     def train(self, step_limit = None, time_limit = None, synchronous = False):
         start = time.time()
         try:
+            loss = np.zeros(1)
             while True:
                 if step_limit is not None:
                     if self.GLOBAL_STEP_COUNT > step_limit:
@@ -465,41 +480,62 @@ class Learner:
                         continue
 
                 batch = ray.get(self.buf.get_batch.remote(self.batch_size))
-                self.train_batch(*batch)
+                temp = self.train_batch(*batch)
+                if loss == 0:
+                    loss = temp
+                    self.save_ckpt(False)
+                elif loss > temp:
+                    self.save_ckpt(True)
+                    loss = temp
+                else:
+                    self.save_ckpt(False)
+                    loss = temp
                 del batch
                 self.GLOBAL_STEP_COUNT += 1
-                if self.GLOBAL_STEP_COUNT % self.ckpt_freq == 0:
-                    self.save_ckpt()
+                # if self.GLOBAL_STEP_COUNT % self.ckpt_freq == 0:
+                #     self.save_ckpt()
         finally:
             print("Finishing up and saving checkpoint.")
             if self.optim:
-                self.save_ckpt()
+                self.save_ckpt(False)
 
 
 def _parse_main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-workers", dest = "n_workers", action = "store", default = 32, type = int)
+    parser.add_argument("--n-workers", dest = "n_workers", action = "store", default = 8, type = int)
     parser.add_argument("--n-epochs", dest = "n_epochs", action = "store", default = 10, type = int)
     parser.add_argument("--num-samples", dest = "num_samples", action = "store", default = 5, type = int)
     parser.add_argument("--encode-dim", dest = "encode_dim", action = "store", default = 128, type = int)
-    parser.add_argument("--feature-dim", dest = "feature_dim", action = "store", default = 7, type = int)
+    parser.add_argument("--feature-dim", dest = "feature_dim", action = "store", default = 2, type = int)
     parser.add_argument("--cnfs", dest = "cnfs", action = "store")
     parser.add_argument("--time-limit", dest = "time_limit", action = "store", type = float)
     parser.add_argument("--lr", dest = "lr", type = float, action = "store", default = 1e-4)
-    parser.add_argument("--ckpt-dir", dest = "ckpt_dir", action = "store")
+    parser.add_argument("--root-dir", dest = "root_dir", action = "store")
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
-    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 1)
+    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 8)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
     parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 25, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
 
     opts = parser.parse_args()
+    opts.root_dir = os.path.join(opts.root_dir, time.strftime("%Y%m%d-%H%M", time.localtime()))
+    opts.ckpt_dir = os.path.join(opts.root_dir, 'weights')
+    opts.log_dir = os.path.join(opts.root_dir, 'logs')
+
+    if not os.path.exists(opts.root_dir):
+        os.makedirs(opts.ckpt_dir)
+        os.makedirs(opts.log_dir)
+
     return opts
 
 
 def _main():
     opts = _parse_main()
+    if not os.path.exists(opts.log_dir):
+        os.makedirs(opts.log_dir)
+    if not os.path.exists(opts.ckpt_dir):
+        os.makedirs(opts.ckpt_dir)
     files = recursively_get_files(opts.cnfs, exts = ["cnf", "gz"], forbidden = ["bz2"])
     print(f"TRAINING WITH {len(files)} CNFS")
 
@@ -510,7 +546,7 @@ def _main():
         print("[WARNING] FALLING BACK ON SINGLE MACHINE CLUSTER")
         ray.init()
 
-    buf = ray.remote(ReplayBuffer).remote(logdir = opts.ckpt_dir)
+    buf = ray.remote(ReplayBuffer).remote(root_dir = opts.root_dir)
     weight_manager = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(WeightManager).remote(
         ckpt_dir = opts.ckpt_dir)
 
@@ -522,10 +558,12 @@ def _main():
 
     learner = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(Learner).remote(
         encode_dim = opts.encode_dim, feature_dim = opts.feature_dim, num_samples = opts.num_samples, buf = buf,
-        weight_manager = weight_manager, batch_size = opts.batch_size, ckpt_freq = opts.ckpt_freq,
+        weight_manager = weight_manager, batch_size = opts.batch_size, log_dir = opts.log_dir, ckpt_freq = opts.ckpt_freq,
         ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = False,
-        model_cfg = model_cfg)  # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
-    workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, model_cfg = model_cfg) for _
+        model_cfg = model_cfg)  # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they
+    # TODO:  are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
+    workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, logdir = opts.log_dir, model_cfg = model_cfg)
+               for _
                in range(opts.n_workers)]
     pool = ActorPool(workers)
 
@@ -538,10 +576,10 @@ def _main():
         completed = 0
         shuffle_environments(workers)
         for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote()),
-                                    range(opts.eps_per_worker * opts.n_workers)):
+                range(opts.eps_per_worker * opts.n_workers)):
             pass
 
-        ray.get(learner.train.remote(synchronous = True))
+        ray.get(learner.train.remote(step_limit = 5000, synchronous = True))
 
 
 if __name__ == "__main__":

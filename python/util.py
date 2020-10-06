@@ -61,11 +61,11 @@ def get_adj_list(G):
 
 def load_data(G, clause_values, batch_size = 256):
     adj_list, node_lists = get_adj_list(G)
-    # print(adj_list, node_lists, clause_values)
     [clause_size, num_nodes] = G.size()
     rand_indices = np.random.permutation(num_nodes)
     train_nodes = list(rand_indices)
     clause_rand_indices = np.random.permutation(clause_size)
     train_cls = list(clause_rand_indices)
+    # print([np.array(train_nodes)], np.array(clause_values)[np.array(train_nodes)])
 
-    return adj_list, node_lists, train_nodes[:batch_size], train_cls[:batch_size], Variable(torch.LongTensor(clause_values[np.array(train_nodes)]))
+    return adj_list, node_lists, train_nodes[:batch_size], train_cls[:batch_size], Variable(torch.LongTensor(np.array(clause_values)[np.array(train_nodes[:batch_size])]))

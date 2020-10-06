@@ -41,13 +41,14 @@ class MeanAggregator(nn.Module):
         _set = set
         if not num_sample is None:
             _sample = random.sample
-            samp_neighs = [_set(_sample(to_neigh, num_sample, )) if len(to_neigh) >= num_sample else to_neigh for
+            samp_neighs = [_set(_sample(to_neigh, num_sample, )) if len(to_neigh) >= num_sample else _set(to_neigh) for
                            to_neigh in to_neighs]
         else:
             samp_neighs = to_neighs
 
         if self.gru:
             samp_neighs = [samp_neigh + set([nodes[i]]) for i, samp_neigh in enumerate(samp_neighs)]
+        # print(*samp_neighs)
         unique_nodes_list = list(set.union(*samp_neighs))
         unique_nodes = {n: i for i, n in enumerate(unique_nodes_list)}
         mask = Variable(torch.zeros(len(samp_neighs), len(unique_nodes)))
@@ -117,7 +118,7 @@ class SupervisedGraphSage(nn.Module):
         self.xent = nn.CrossEntropyLoss()
 
         self.weight = nn.Parameter(torch.FloatTensor(num_classes, enc.embed_dim))
-        nn.init.xavier_uniform(self.weight)
+        nn.init.xavier_uniform_(self.weight)
 
     def forward(self, nodes):
         embeds = self.enc(nodes)
@@ -126,5 +127,6 @@ class SupervisedGraphSage(nn.Module):
 
     def loss(self, nodes, labels):
         scores = self.forward(nodes)
+        # print(labels, labels.size(), scores.size())
         return self.xent(scores, labels.squeeze())
 

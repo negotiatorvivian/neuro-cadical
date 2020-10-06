@@ -249,9 +249,9 @@ class TrainLogger:
         self.writer.add_scalar(name, value, global_step)
 
     def write_log(self, *args):
-        print(f"{datetime.datetime.now()}:", *args)
-        # with open(self.logfile, "a") as f:
-        #     print(f"{datetime.datetime.now()}:", *args)
+        # print(f"{datetime.datetime.now()}:", *args)
+        with open(self.logfile, "a") as f:
+            print(*args, file = f)
         #     print(f"{datetime.datetime.now()}:", *args, file = f)
 
 

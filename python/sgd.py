@@ -426,13 +426,13 @@ class TorchTrainer:
 
         # TODO: Have an auto "use_gpu" option to detect and use GPUs.
         self.use_gpu = use_gpu
-        self.serialize_data_creation = serialize_data_creation
+        # self.serialize_data_creation = serialize_data_creation
         self.batch_size = batch_size
         self.max_replicas = num_replicas
         self.num_cpus = num_cpus
 
         self.use_fp16 = use_fp16
-        self.use_tqdm = use_tqdm
+        # self.use_tqdm = use_tqdm
 
         if apex_args and not isinstance(apex_args, dict):
             raise ValueError("apex_args needs to be a dict object.")
