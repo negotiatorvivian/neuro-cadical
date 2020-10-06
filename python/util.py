@@ -1,5 +1,9 @@
 import os
 import re
+import tempfile
+from satenv import SatEnv
+from uuid import uuid4
+
 import torch
 from torch.autograd import Variable
 
@@ -69,3 +73,25 @@ def load_data(G, clause_values, batch_size = 256):
     # print([np.array(train_nodes)], np.array(clause_values)[np.array(train_nodes)])
 
     return adj_list, node_lists, train_nodes[:batch_size], train_cls[:batch_size], Variable(torch.LongTensor(np.array(clause_values)[np.array(train_nodes[:batch_size])]))
+
+
+def set_env(from_cnf = None, from_file = None):
+    if from_cnf is not None:
+        td = tempfile.TemporaryDirectory()
+        cnf_path = os.path.join(td.name, str(uuid4()) + ".cnf")
+        from_cnf.to_file(cnf_path)
+        try:
+            env = SatEnv(cnf_path)
+            return env
+        except RuntimeError as e:
+            print("BAD CNF:", cnf_path)
+        raise e
+    elif from_file is not None:
+        try:
+            env = SatEnv(from_file)
+            return env
+        except RuntimeError as e:
+            print("BAD CNF:", from_file)
+            raise e
+    else:
+        raise Exception("must set env with CNF or file")
