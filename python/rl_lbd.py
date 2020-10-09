@@ -281,6 +281,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     # v^
     vals = torch.sigmoid(
         torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
+    print(vals)
 
     v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
     loss = p_loss + 0.1 * v_loss
@@ -298,11 +299,10 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
-def predict_step(model, batcher, batch_size, env, graphsage, nodes, labels, device = torch.device("cpu")):
-    CL_idxs = env.render()
-    G = mk_G(CL_idxs)
+def predict_step(model, batcher, G, batch_size, env, graphsage, nodes, labels, device = torch.device("cpu")):
+    # CL_idxs = env.render()
+    # G = mk_G(CL_idxs)
     pre_policy_logitss, pre_unreduced_value_logitss = model(G)
-    pre_policy_logitss = pre_policy_logitss.squeeze().detach()
     actions = softmax_all_from_logits(pre_policy_logitss, batch_size) + 1
     actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
     # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
