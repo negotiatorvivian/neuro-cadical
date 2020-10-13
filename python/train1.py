@@ -86,7 +86,8 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
 
 def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = True,
                use_glue_counts = True):
-    # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader does magic conversions from numpy arrays to torch tensors
+    # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader
+    # does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
     Gs = []
     var_lemma_countss = []
