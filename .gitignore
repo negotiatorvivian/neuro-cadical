@@ -20,11 +20,10 @@ data/**/*
 cgen/
 cadical/**/*
 cadical-origin/
-cadical
 satenv/**/*
 torchscript/
 .idea/
 .vscode/
 *.cnf
 .DS_Store
-**/*/.DS_Store
+**/sp/
