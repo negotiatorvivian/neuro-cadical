@@ -180,11 +180,12 @@ class H5Dataset(td.IterableDataset):
     Dataset which yields either single NMSDPs or lists of NMSDPs (depending on if batch_size is None or a positive integer.)
     """
 
-    def __init__(self, data_dir, batch_size = 16):
+    def __init__(self, data_dir, batch_size = 16, type = 'lbdp'):
         super(H5Dataset, self).__init__()
         self.data_dir = data_dir
         self.files = files_with_extension(self.data_dir, "h5")
         self.shuffle_files()
+        self.type =type
         self.batch_size = batch_size
 
     def shuffle_files(self):
@@ -194,7 +195,10 @@ class H5Dataset(td.IterableDataset):
         for f in self.files:
             with h5py.File(f, "r") as f:
                 for dp_id in f:
-                    yield deserialize_lbdp(f[dp_id], dp_id)
+                    if self.type == 'lbdp':
+                        yield deserialize_lbdp(f[dp_id], dp_id)
+                    else:
+                        yield deserialize_nmsdp(f[dp_id], dp_id)
 
     def __iter__(self):
         if self.batch_size is None:
@@ -215,7 +219,7 @@ def h5_worker_init_fn(worker_id):
         worker_info.dataset.files)  # print(f"[DATALOADER] STARTING WORKER {worker_id} WITH SHARD OF {len(worker_info.dataset.files)} FILES")
 
 
-def mk_H5DataLoader(data_dir, batch_size, num_workers):
+def mk_H5DataLoader(data_dir, batch_size, num_workers, type = 'lbdp'):
     """
     Helper function for constructing a parallelized H5DataLoader which shards the files in `data_dir` among `num_workers` workers.
 
@@ -225,7 +229,7 @@ def mk_H5DataLoader(data_dir, batch_size, num_workers):
 
     (WARNING: this is an abuse of the API.)
     """
-    h5d = H5Dataset(data_dir, batch_size = batch_size)
+    h5d = H5Dataset(data_dir, batch_size = batch_size, type = type)
 
     return td.DataLoader(h5d, batch_size = 1, num_workers = num_workers, worker_init_fn = h5_worker_init_fn,
         pin_memory = True)

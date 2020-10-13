@@ -14,7 +14,7 @@ from python.util import check_make_path, files_with_extension, load_data
 from python.gnn import *
 from python.batch import Batcher
 from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
-from python.gen_data import NMSDP, mk_CNFDataloader, CNFProcessor
+from sp.factorgraph.dataset import DynamicBatchDivider
 
 
 def compute_softmax_kldiv_loss(logitss, probss):
@@ -84,8 +84,24 @@ def NMSDP_to_sparse2(nmsdp):  # needed because of some magic tensor coercion don
     return torch.sparse.FloatTensor(indices = indices, values = values, size = size)
 
 
-def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = True,
-               use_glue_counts = True):
+def NMSDP_to_line(nmsdp):
+    C_idxs = nmsdp.C_idxs[0]
+    L_idxs = nmsdp.L_idxs[0]
+    signs = np.array([1] * (2 * nmsdp.n_vars[0]))
+    signs[nmsdp.n_vars[0]:] = -1
+    edge_features = signs[L_idxs]
+    L_idxs = L_idxs.cpu().numpy()
+    n_vars = nmsdp.n_vars[0].cpu().numpy()[0]
+    n_cls = nmsdp.n_clauses[0].cpu().numpy()[0]
+    L_idxs[L_idxs > n_vars - 1] -= n_vars
+    indices = torch.stack([torch.from_numpy(L_idxs).type(torch.long), C_idxs.type(torch.long)])
+    result = True
+    # return torch.sparse.FloatTensor(indices = indices, values = torch.from_numpy(edge_features), size = size)
+    return (n_vars, n_cls, indices, edge_features, None, float(result), [])
+
+
+def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False,
+        use_NMSDP_to_sparse2 = True, use_glue_counts = True):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader
     # does magic conversions from numpy arrays to torch tensors
     optim.zero_grad()
@@ -270,8 +286,8 @@ class Trainer:
     The `logger` attribute is a TrainLogger object, responsible for writing to training logs _and_ TensorBoard summaries.
     """
 
-    def __init__(self, model, dataset, lr, root_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
-            index = 0):
+    def __init__(self, model, dataset, hidden_dim, lr, root_dir, ckpt_freq, restore = False, n_steps = -1,
+            n_epochs = -1, index = 0, limit = 4000000, batch_replication = 1):
         self.model = model
         self.dataset = dataset
         self.ckpt_dir = os.path.join(root_dir, "weights/")
@@ -286,12 +302,17 @@ class Trainer:
         self.model.to(self.device)
         self.lr = lr
         self.optimizer = optim.Adam(self.model.parameters(), lr = self.lr, betas = (0.9, 0.98))
+        self.batch_divider = DynamicBatchDivider(limit // batch_replication, hidden_dim)
         util.check_make_path(self.ckpt_dir)
         if restore:
             try:
                 self.load_latest_ckpt()
             except IndexError:
                 pass
+
+    def _to_cuda(self, data):
+        if isinstance(data, list):
+            return data
 
     def save_model(self, model, optimizer, ckpt_path):  # TODO(jesse): implement a CheckpointManager
         torch.save({
@@ -366,6 +387,70 @@ class Trainer:
         self.load_model(self.model, self.optimizer, ckpt_path)
         self.logger.write_log(f"[TRAIN LOOP] Loaded weights from {ckpt_path}.")
 
+    def transform_data(self, nmsdps):
+        # graph_map, batch_variable_map, batch_function_map,edge_feature, graph_feat, label
+        result = []
+        for nmsdp in nmsdps:
+            data = NMSDP_to_line(nmsdp)
+            result.append(data)
+        vn, fn, gm, ef, gf, l, md = zip(*result)
+        variable_num, function_num, graph_map, edge_feature, graph_feat, label, misc_data = \
+            self.batch_divider.divide(vn, fn, gm, ef, gf, l, md)
+        segment_num = len(variable_num)
+
+        graph_feat_batch = []
+        graph_map_batch = []
+        batch_variable_map_batch = []
+        batch_function_map_batch = []
+        edge_feature_batch = []
+        label_batch = []
+
+        for i in range(segment_num):
+
+            # Create the graph features batch
+            graph_feat_batch += [
+                None if graph_feat[i][0] is None else torch.from_numpy(np.stack(graph_feat[i])).float()]
+
+            # Create the edge feature batch
+            edge_feature_batch += [torch.from_numpy(np.expand_dims(np.concatenate(edge_feature[i]), 1)).float()]
+
+            # Create the label batch
+            label_batch += [torch.from_numpy(np.expand_dims(np.array(label[i]), 1)).float()]
+
+            # Create the graph map, variable map and function map batches
+            g_map_b = np.zeros((2, 0), dtype = np.int32)
+            v_map_b = np.zeros(0, dtype = np.int32)
+            f_map_b = np.zeros(0, dtype = np.int32)
+            variable_ind = 0
+            function_ind = 0
+
+            for j in range(len(graph_map[i])):
+                graph_map[i][j][0, :] += variable_ind
+                graph_map[i][j][1, :] += function_ind
+                g_map_b = np.concatenate((g_map_b, graph_map[i][j]), axis = 1)
+
+                v_map_b = np.concatenate((v_map_b, np.tile(j, variable_num[i][j])))
+                f_map_b = np.concatenate((f_map_b, np.tile(j, function_num[i][j])))
+
+                variable_ind += variable_num[i][j]
+                function_ind += function_num[i][j]
+
+            graph_map_batch += [torch.from_numpy(g_map_b).int()]
+            batch_variable_map_batch += [torch.from_numpy(v_map_b).int()]
+            batch_function_map_batch += [torch.from_numpy(f_map_b).int()]
+
+        return graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, graph_feat_batch, label_batch, misc_data
+
+    def train_sp(self, train_data):
+        total_example_num = 0
+        for (j, data) in enumerate(train_data):
+            segment_num = len(data[0])
+            for i in range(segment_num):
+                (graph_map, batch_variable_map, batch_function_map,
+                 edge_feature, graph_feat, label, _) = [self._to_cuda(d[i]) for d in data]
+                total_example_num += (batch_variable_map.max() + 1)
+                
+
     def train(self):
         self.logger.write_log(f"[TRAIN LOOP] HYPERPARAMETERS: LR {self.lr}")
         self.logger.write_log(f"[TRAIN LOOP] NUM_EPOCHS: {self.n_epochs}")
@@ -377,10 +462,13 @@ class Trainer:
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             min_loss = np.zeros(1)
             for nmsdps in self.dataset:
-                drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
-                                                                                              self.optimizer, nmsdps, device = self.device,
-                                                                                              CUDA_FLAG = self.CUDA_FLAG,
-                                                                                              use_NMSDP_to_sparse2 = True, use_glue_counts = False)
+                data = self.transform_data(nmsdps)
+                self.train_sp(*data)
+
+                drat_loss, core_loss, core_clause_loss, \
+                loss, grad_norm, l2_loss = train_step(self.model, batcher, self.optimizer, nmsdps,
+                                                      device = self.device, CUDA_FLAG = self.CUDA_FLAG,
+                                                      use_NMSDP_to_sparse2 = True, use_glue_counts = False)
                 if epoch_count % 10 == 0 and self.GLOBAL_STEP_COUNT % 10 == 0:
                     self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -388,7 +476,8 @@ class Trainer:
                     self.logger.write_scalar("total_loss", loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("LAST GRAD NORM", grad_norm, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("l2_loss", l2_loss, self.GLOBAL_STEP_COUNT)
-                    self.logger.write_log(f"[TRAIN LOOP] Finished global step {self.GLOBAL_STEP_COUNT}. Loss: {loss}.")
+                    self.logger.write_log(f"[TRAIN LOOP] Finished global step {self.GLOBAL_STEP_COUNT}."
+                                          f" Loss: {loss}.")
                 self.GLOBAL_STEP_COUNT += 1
                 if min_loss == 0 or min_loss > loss.detach().cpu().numpy():
                     saved = self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT)
@@ -398,7 +487,6 @@ class Trainer:
                         break
         if not saved:
             self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT, "last", force_save = True)  # save at the end of every epoch regardless
-
 
 # def gen_nmsdp_batch(k):
 #     nmsdps = []
@@ -444,9 +532,9 @@ def _main_train1(cfg = None, opts = None):
 
     model = GNN1(**cfg)
 
-    dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
-    trainer = Trainer(model, dataset, opts.lr, root_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
-        n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
+    dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers, 'nmsdp')
+    trainer = Trainer(model, dataset, 150, opts.lr, root_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq,
+                      restore = False, n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
         while True:
