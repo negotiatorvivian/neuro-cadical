@@ -270,12 +270,12 @@ class Trainer:
     The `logger` attribute is a TrainLogger object, responsible for writing to training logs _and_ TensorBoard summaries.
     """
 
-    def __init__(self, model, dataset, lr, ckpt_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
+    def __init__(self, model, dataset, lr, root_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
             index = 0):
         self.model = model
         self.dataset = dataset
-        self.ckpt_dir = ckpt_dir
-        self.logger = TrainLogger(os.path.join(self.ckpt_dir, "logs/"))
+        self.ckpt_dir = os.path.join(root_dir, "weights/")
+        self.logger = TrainLogger(os.path.join(root_dir, "logs/"))
         self.ckpt_freq = ckpt_freq
         self.save_counter = 0
         self.GLOBAL_STEP_COUNT = 0
@@ -380,7 +380,7 @@ class Trainer:
                 drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
                                                                                               self.optimizer, nmsdps, device = self.device,
                                                                                               CUDA_FLAG = self.CUDA_FLAG,
-                                                                                              use_NMSDP_to_sparse2 = True)
+                                                                                              use_NMSDP_to_sparse2 = True, use_glue_counts = False)
                 if epoch_count % 10 == 0 and self.GLOBAL_STEP_COUNT % 10 == 0:
                     self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -427,6 +427,7 @@ def _parse_main():
     parser.add_argument("--forever", action = "store_true")
     parser.add_argument("--index", action = "store", default = 0, type = int)
     opts = parser.parse_args()
+    opts.ckpt_dir = os.path.join(opts.ckpt_dir, time.strftime("%Y%m%d-%H%M", time.localtime()))
 
     return opts
 
@@ -444,7 +445,7 @@ def _main_train1(cfg = None, opts = None):
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers)
-    trainer = Trainer(model, dataset, opts.lr, ckpt_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
+    trainer = Trainer(model, dataset, opts.lr, root_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq, restore = False,
         n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
