@@ -26,4 +26,3 @@ torchscript/
 .vscode/
 *.cnf
 .DS_Store
-**/sp/
