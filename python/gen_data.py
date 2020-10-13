@@ -29,7 +29,7 @@ def lemma_occ(tsr):
     n_vars = tsr.shape[0]
     result = np.zeros(shape = [n_vars])
     for idx in range(n_vars):
-        result[idx] = np.sum(tsr[idx, 0, :])
+        result[idx] = np.sum(tsr[idx, 0, :].numpy())
     return result
 
 
@@ -60,11 +60,12 @@ class CNFDataset(td.IterableDataset):
 
 
 class CNFDirDataset:
-    def __init__(self, data_dir, batch_size):
+    def __init__(self, data_dir, batch_size, type = 'lbdp'):
         self.data_dir = data_dir
         self.files = util.files_with_extension(self.data_dir, "cnf")
         self.file_index = 0
         self.batch_size = batch_size
+        self.type = type
         self.lbdps = self.gen_formula()
 
     def __len__(self):
@@ -80,7 +81,10 @@ class CNFDirDataset:
         for f in self.files:
             cnf = CNF(from_file = f)
             td = tempfile.TemporaryDirectory()
-            yield gen_lbdp(td, cnf)
+            if self.type == 'lbdp':
+                yield gen_lbdp(td, cnf)
+            else:
+                yield gen_nmsdp(td, cnf)
 
     def gen_formula(self):
         try:
@@ -130,18 +134,29 @@ def coo(fmla):
     C_result = []
     L_result = []
     clause_values = [0] * len(fmla.clauses)
+    edge_features = []
     for cls_idx in range(len(fmla.clauses)):
         for lit in fmla.clauses[cls_idx]:
             if lit > 0:
+                edge_features.append(1)
                 clause_values[cls_idx] = 1
                 lit_enc = lit - 1
             else:
+                edge_features.append(0)
                 lit_enc = fmla.nv + abs(lit) - 1
 
             C_result.append(cls_idx)
             L_result.append(lit_enc)
-    return np.array(C_result, dtype = "int32"), np.array(L_result, dtype = "int32"), np.array(clause_values,
-        dtype = "int32")
+    variable_ind = np.abs(np.array(L_result, dtype = np.int32))
+    function_ind = np.abs(np.array(C_result, dtype = np.int32))
+    graph_map = np.stack((variable_ind, function_ind))
+    pos_mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_features) == 1).squeeze().float(),
+                                       [fmla.nv*2, len(fmla.clauses)])
+    neg_mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_features) == 0).squeeze().float(),
+                                       [fmla.nv*2, len(fmla.clauses)])
+    mask = torch.cat((pos_mask.unsqueeze(1).to_dense(), neg_mask.unsqueeze(1).to_dense()), 1)
+    return function_ind, variable_ind, np.array(clause_values, dtype = "int32"), np.array(edge_features,
+                                                                                          dtype = "int32"), mask
 
 
 def lbdcdl(cnf_dir, cnf, llpath, dump_dir = None, dumpfreq = 50e3, timeout = None, clause_limit = 1e6):
@@ -179,20 +194,48 @@ def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dum
     with td as td:
         llpath = os.path.join(td, name + ".json")
         lbdcdl(td, fmla, llpath, dump_dir = dump_dir, dumpfreq = dumpfreq, timeout = timeout,
-            clause_limit = clause_limit)
+               clause_limit = clause_limit)
         with open(llpath, "r") as f:
             for idx, line in enumerate(f):
                 counts[idx] = int(line.split()[1])
 
-    C_idxs, L_idxs, clause_values = coo(fmla)
+    C_idxs, L_idxs, clause_values, _, _ = coo(fmla)
     n_clauses = len(fmla.clauses)
 
     lbdp = LBDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
-        n_vars = np.array([n_vars], dtype = "int32"), n_clauses = np.array([n_clauses], dtype = "int32"),
-        C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), clause_values = np.array(clause_values),
-        glue_counts = counts)
+                n_vars = np.array([n_vars], dtype = "int32"), n_clauses = np.array([n_clauses], dtype = "int32"),
+                C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), clause_values = np.array(clause_values),
+                glue_counts = counts)
 
     return lbdp
+
+
+def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dump_dir = None, dumpfreq = 50e3,
+        timeout = None, clause_limit = 1e6):
+    clause_limit = int(clause_limit)
+    fmla = cnf
+    counts = np.zeros(fmla.nv)
+    n_vars = fmla.nv
+    n_clauses = len(fmla.clauses)
+    name = str(uuid.uuid4())
+    with td as td:
+        llpath = os.path.join(td, name + ".json")
+        lbdcdl(td, fmla, llpath, dump_dir = dump_dir, dumpfreq = dumpfreq, timeout = timeout,
+               clause_limit = clause_limit)
+        with open(llpath, "r") as f:
+            for idx, line in enumerate(f):
+                counts[idx] = int(line.split()[1])
+
+    C_idxs, L_idxs, clause_values, edge_features, mask = coo(fmla)
+    var_lemma_counts = lemma_occ(mask)
+    n_clauses = len(fmla.clauses)
+
+    nmsdp = NMSDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
+                n_vars = np.array([n_vars], dtype = "int32"), n_clauses = np.array([n_clauses], dtype = "int32"),
+                C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), core_var_mask = edge_features,
+                core_clause_mask = clause_values, var_lemma_counts = var_lemma_counts)
+
+    return nmsdp
 
 
 class CNFProcessor:
@@ -231,7 +274,7 @@ class CNFProcessor:
 def mk_CNFDataloader(data_dir, batch_size, num_workers):
     cnf_dataset = CNFDirDataset(data_dir, batch_size)
     return td.DataLoader(cnf_dataset, batch_size = 1, num_workers = num_workers, worker_init_fn = h5_worker_init_fn,
-        pin_memory = True)
+                         pin_memory = True)
 
 
 def parse_main():
@@ -247,9 +290,9 @@ def parse_main():
 
 if __name__ == "__main__":
     cfg = parse_main()
-    cnf_dataset = CNFDirDataset(cfg.data_dir, cfg.batch_size)
+    cnf_dataset = CNFDirDataset(cfg.data_dir, cfg.batch_size, 'nmsdp')
     index = 0
-    processor = CNFProcessor(cnf_dataset.lbdps)
+    processor = CNFProcessor(cnf_dataset.lbdps, use_glue_counts = False)
     name = str(uuid.uuid4())
     with h5py.File(os.path.join(cfg.dest_dir, name + '.h5'), 'a') as f:
         for ldbp in processor:

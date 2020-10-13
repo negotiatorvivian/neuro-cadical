@@ -7,6 +7,7 @@ import numpy as np
 import scipy.signal
 import time
 import os
+import yaml, csv
 import json
 import ray
 from ray.util import ActorPool
@@ -44,7 +45,7 @@ def discount_cumsum(x, discount = 1):
 
 
 def mk_G(CL_idxs):
-    # print(CL_idxs.C_idxs, CL_idxs.L_idxs)
+    print(CL_idxs.C_idxs, CL_idxs.L_idxs)
     C_idxs = np.array(CL_idxs.C_idxs, dtype = "int32")
     L_idxs = np.array(CL_idxs.L_idxs, dtype = "int32")
     indices = torch.stack([torch.as_tensor(C_idxs).to(torch.long), torch.as_tensor(L_idxs).to(torch.long)])
@@ -141,6 +142,8 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             np.random.seed(seed)
         if from_cnf is not None or from_file is not None:
             self.set_env(from_cnf, from_file)
+            cl_indices = self.env.render()
+
         self.sync_freq = sync_freq
         self.ckpt_rank = 0
         self.trajectory_count = 0
@@ -167,6 +170,11 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
                 raise e
         else:
             raise Exception("must set env with CNF or file")
+
+    def convert_indices(self, indices):
+        variable_num, function_num = indices.n_vars, indices.n_clauses
+        variable_ind = indices.L_idxs
+        function_ind = indices.C_idxs
 
     def sample_trajectory(self):
         tau = sample_trajectory(self.agent, self.env, self.logger)
@@ -302,6 +310,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
     # CL_idxs = env.render()
     # G = mk_G(CL_idxs)
+    print('------predict start------')
     pre_policy_logitss, pre_unreduced_value_logitss = model(G)
     # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
     actions = softmax_all_from_logits(pre_policy_logitss.squeeze().detach(), batch_size) + 1
@@ -327,7 +336,9 @@ class WeightManager:
 
     def load_latest_ckpt(self):
         try:
-            ckpt_path = self.get_latest_from_index(self.ckpt_dir)
+            root_dir = '/'.join(self.ckpt_dir.split('/')[:-2])
+            ckpt_path = self.get_latest_from_index(root_dir)
+            print(root_dir, ckpt_path)
         except IndexError:
             print("[WEIGHT MANAGER] NO INDEX FOUND")
             return None
@@ -356,9 +367,10 @@ class WeightManager:
 
     def update_index(self, ckpt_path):
         ckpt_dir = os.path.dirname(ckpt_path)
-        index_files = files_with_extension(ckpt_dir, "index")
+        root_dir = '/'.join(ckpt_dir.split('/')[:-2])
+        index_files = files_with_extension(root_dir, "index")
         if len(index_files) == 0:
-            index = os.path.join(ckpt_dir, "latest.index")
+            index = os.path.join(root_dir, "latest.index")
         else:
             assert len(index_files) == 1
             index = index_files[0]
@@ -409,13 +421,13 @@ class Learner:
 
         self.batcher = Batcher()
         if restore:
+            # print('------load_latest_ckpt------')
             ckpt = ray.get(self.weight_manager.load_latest_ckpt.remote())
             if ckpt is not None:
                 self.set_weights(ckpt)
 
     def write_stats(self, stats):
         for name, value in stats.items():
-            # print(name, value)
             self.writer.add_text(name, str(value), self.GLOBAL_STEP_COUNT)
             self.writer.add_scalar(name, value, self.GLOBAL_STEP_COUNT)
 
@@ -521,15 +533,17 @@ class Learner:
     def predict(self):
         Gs, mu_logitss, actions, gs, advs = ray.get(self.buf.get_batch.remote(self.batch_size))
         batch_size = len(Gs)
-        print(batch_size)
-        G, clause_values = self.batcher.batch(Gs)
-        predict_step(self.model, self.batcher, G, batch_size, None, None, None, self.device)
+        i = 0
+        while i < batch_size:
+            G, clause_values = self.batcher.batch(Gs)
+            predict_step(self.model, self.batcher, G, batch_size, None, None, None, self.device)
+            i += 1
 
 
 def _parse_main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n-workers", dest = "n_workers", action = "store", default = 8, type = int)
+    parser.add_argument("--n-workers", dest = "n_workers", action = "store", default = 1, type = int)
     parser.add_argument("--n-epochs", dest = "n_epochs", action = "store", default = 10, type = int)
     parser.add_argument("--num-samples", dest = "num_samples", action = "store", default = 5, type = int)
     parser.add_argument("--encode-dim", dest = "encode_dim", action = "store", default = 128, type = int)
@@ -543,6 +557,7 @@ def _parse_main():
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
     parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 25, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
+    parser.add_argument("--sp-cfg", dest = "sp_cfg", action = "store", default = None)
 
     opts = parser.parse_args()
     opts.root_dir = os.path.join(opts.root_dir, time.strftime("%Y%m%d-%H%M", time.localtime()))
@@ -552,6 +567,8 @@ def _parse_main():
     if not os.path.exists(opts.root_dir):
         os.makedirs(opts.ckpt_dir)
         os.makedirs(opts.log_dir)
+    with open(opts.sp_cfg, 'r') as f:
+        config = yaml.load(f)
 
     return opts
 
@@ -611,4 +628,4 @@ def _main(is_train = True):
 
 
 if __name__ == "__main__":
-    _main()
+    _main(False)
