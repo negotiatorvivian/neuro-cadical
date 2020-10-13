@@ -265,14 +265,14 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
     actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
     advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
-    print(policy_logitss.size())
+
     policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
     mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
     rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
                         enumerate(zip(policy_distribs, mu_distribs))])
 
     psis = advs * rhos
-
+    print(f'advs:{advs}, rhos: {rhos}')
     log_probs = torch.empty(batch_size).to(device)
     for i in range(batch_size):
         log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
@@ -281,7 +281,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     # v^
     vals = torch.sigmoid(
         torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
-    print(vals)
+    # print(f'vals:{vals}, gs: {gs}')
 
     v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
     loss = p_loss + 0.1 * v_loss
@@ -299,18 +299,16 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
-def predict_step(model, batcher, G, batch_size, env, graphsage, nodes, labels, device = torch.device("cpu")):
+def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
     # CL_idxs = env.render()
     # G = mk_G(CL_idxs)
     pre_policy_logitss, pre_unreduced_value_logitss = model(G)
-    actions = softmax_all_from_logits(pre_policy_logitss, batch_size) + 1
-    actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
     # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
-    policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in pre_policy_logitss]
-    log_probs = torch.empty(batch_size).to(device)
-    for i in range(batch_size):
-        log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
-    print(log_probs)
+    actions = softmax_all_from_logits(pre_policy_logitss.squeeze().detach(), batch_size) + 1
+    actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
+    vals = torch.sigmoid(
+        torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
+    print(f'actions:{actions}, vals: {vals}')
 
 
 class WeightManager:
@@ -521,9 +519,11 @@ class Learner:
                 self.save_ckpt(False)
 
     def predict(self):
-        batch = ray.get(self.buf.get_batch.remote(self.batch_size))
-        env = set_env(None, cnf_path)
-        predict_step(self.model, self.batcher, self.batch_size, env, None, None, None, self.device)
+        Gs, mu_logitss, actions, gs, advs = ray.get(self.buf.get_batch.remote(self.batch_size))
+        batch_size = len(Gs)
+        print(batch_size)
+        G, clause_values = self.batcher.batch(Gs)
+        predict_step(self.model, self.batcher, G, batch_size, None, None, None, self.device)
 
 
 def _parse_main():
@@ -585,7 +585,7 @@ def _main(is_train = True):
     learner = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(Learner).remote(
         encode_dim = opts.encode_dim, feature_dim = opts.feature_dim, num_samples = opts.num_samples, buf = buf,
         weight_manager = weight_manager, batch_size = opts.batch_size, log_dir = opts.log_dir,
-        ckpt_freq = opts.ckpt_freq, ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = False,
+        ckpt_freq = opts.ckpt_freq, ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = not is_train,
         model_cfg = model_cfg)  # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they
     # TODO:  are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
     workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, logdir = opts.log_dir,
