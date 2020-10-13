@@ -171,6 +171,7 @@ class StatHolder:
                 "avg_refocus_time": result_dict.get("avg_refocus_time", 0), "avg_glue": result_dict.get("avg_glue", 0),
                 "oom_count": result_dict.get("oom_count", 0)
             }
+            print(f'{instance_name}, result: {result_dict["result"]}')
 
         if self.stats[instance_name]["status"]:
             self.solve_count += 1

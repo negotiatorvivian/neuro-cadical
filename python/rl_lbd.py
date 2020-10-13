@@ -302,6 +302,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
     # CL_idxs = env.render()
     # G = mk_G(CL_idxs)
+    print('------predict start------')
     pre_policy_logitss, pre_unreduced_value_logitss = model(G)
     # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
     actions = softmax_all_from_logits(pre_policy_logitss.squeeze().detach(), batch_size) + 1
@@ -327,7 +328,9 @@ class WeightManager:
 
     def load_latest_ckpt(self):
         try:
-            ckpt_path = self.get_latest_from_index(self.ckpt_dir)
+            root_dir = '/'.join(self.ckpt_dir.split('/')[:-2])
+            ckpt_path = self.get_latest_from_index(root_dir)
+            print(root_dir, ckpt_path)
         except IndexError:
             print("[WEIGHT MANAGER] NO INDEX FOUND")
             return None
@@ -356,9 +359,10 @@ class WeightManager:
 
     def update_index(self, ckpt_path):
         ckpt_dir = os.path.dirname(ckpt_path)
-        index_files = files_with_extension(ckpt_dir, "index")
+        root_dir = '/'.join(ckpt_dir.split('/')[:-2])
+        index_files = files_with_extension(root_dir, "index")
         if len(index_files) == 0:
-            index = os.path.join(ckpt_dir, "latest.index")
+            index = os.path.join(root_dir, "latest.index")
         else:
             assert len(index_files) == 1
             index = index_files[0]
@@ -409,13 +413,13 @@ class Learner:
 
         self.batcher = Batcher()
         if restore:
+            # print('------load_latest_ckpt------')
             ckpt = ray.get(self.weight_manager.load_latest_ckpt.remote())
             if ckpt is not None:
                 self.set_weights(ckpt)
 
     def write_stats(self, stats):
         for name, value in stats.items():
-            # print(name, value)
             self.writer.add_text(name, str(value), self.GLOBAL_STEP_COUNT)
             self.writer.add_scalar(name, value, self.GLOBAL_STEP_COUNT)
 
@@ -521,9 +525,11 @@ class Learner:
     def predict(self):
         Gs, mu_logitss, actions, gs, advs = ray.get(self.buf.get_batch.remote(self.batch_size))
         batch_size = len(Gs)
-        print(batch_size)
-        G, clause_values = self.batcher.batch(Gs)
-        predict_step(self.model, self.batcher, G, batch_size, None, None, None, self.device)
+        i = 0
+        while i < batch_size:
+            G, clause_values = self.batcher.batch(Gs)
+            predict_step(self.model, self.batcher, G, batch_size, None, None, None, self.device)
+            i += 1
 
 
 def _parse_main():
@@ -611,4 +617,4 @@ def _main(is_train = True):
 
 
 if __name__ == "__main__":
-    _main(git )
+    _main(False)

@@ -1,5 +1,7 @@
 from gnn import *
 from pathlib import Path
+import json
+from util import files_with_extension
 
 
 def load_GNN1_drat(model_cfg_path, ckpt_path):
@@ -34,21 +36,30 @@ def deploy_GNN1_drat(model_cfg_path, ckpt_path, save_path):
     serialize_GNN1_drat(load_GNN1_drat(model_cfg_path, ckpt_path), save_path)
 
 
+def get_ckpt_from_index(ckpt_dir):
+    index = files_with_extension(ckpt_dir, "index")[0]
+    with open(index, "r") as f:
+        cfg_dict = json.load(f)
+    return cfg_dict["latest"]
+
+
 def _parse_main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--cfg", dest = "cfg", action = "store")
-    parser.add_argument("--ckpt", dest = "ckpt_path", type = str, action = "store")
-    parser.add_argument("--dest", dest = "dest", type = str, action = "store")
+    parser.add_argument("--ckpt", dest = "root_path", type = str, action = "store")
+    # parser.add_argument("--dest", dest = "dest", type = str, action = "store")
     opts = parser.parse_args()
     return opts
 
 
 def _main():
     opts = _parse_main()
-    ckpt_path = opts.ckpt_path
+    root_path = opts.root_path
+    ckpt_path = get_ckpt_from_index(root_path)
+    dest = '/'.join(ckpt_path.split('/')[:-1])
     rootname = str(Path(opts.cfg).stem)
-    save_path_drat = os.path.join(opts.dest, rootname + "_drat.pt")
+    save_path_drat = os.path.join(dest, rootname + "_drat.pt")
     deploy_GNN1_drat(model_cfg_path = opts.cfg, ckpt_path = ckpt_path, save_path = save_path_drat)
     print(f"Saved model to {save_path_drat}")
 

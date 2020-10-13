@@ -71,13 +71,12 @@ def _parse_main():
     parser.add_argument("--benchmarks", action = "store", dest = "benchmarks", nargs = "*", default = None)
     parser.add_argument("cfg", action = "store", type = str)
     parser.add_argument("ckpt", action = "store", type = str)
-    parser.add_argument("--n-workers", dest = "n_workers", action = "store", type = int)
-    parser.add_argument("--log-dir", dest = "log_dir", action = "store",
-        default = os.path.join("home", "ubuntu", "efs", "solver_eval"))
+    parser.add_argument("--n-workers", dest = "n_workers", action = "store", type = int, default = 8)
+    parser.add_argument("--root-dir", dest = "log_dir", action = "store", type = str)
     parser.add_argument("--baseline", action = "store_true")
     parser.add_argument("--no-neuro", dest = "no_neuro", action = "store_true")
     parser.add_argument("--timeout", type = int, dest = "timeout", action = "store", default = 5000)
-    parser.add_argument("--mem-per-worker", type = int, dest = "mem_per_worker", action = "store", default = 8)
+    parser.add_argument("--mem-per-worker", type = int, dest = "mem_per_worker", action = "store", default = 1)
     parser.add_argument("--glue-sucks", dest = "glue_sucks", action = "store_true")
     parser.add_argument("--glue-sucks-margin", dest = "glue_sucks_margin", action = "store", default = 20)
     parser.add_argument("--config", dest = "config", default = None, action = "store")
@@ -95,6 +94,8 @@ def _parse_main():
     parser.add_argument("--stabilize-only", dest = "stabilize_only", default = 0, type = int)
     parser.add_argument("--walk", dest = "walk", action = "store", default = 1, type = int)
     opts = parser.parse_args()
+    root_dir = os.path.join(opts.log_dir, time.strftime("%Y%m%d-%H%M", time.localtime()))
+    opts.log_dir = os.path.join(root_dir, 'logs')
     try:
         assert opts.config == "sat" or opts.config == "unsat" or opts.config is None
     except AssertionError as e:
