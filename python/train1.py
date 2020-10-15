@@ -450,7 +450,6 @@ class Trainer:
                  edge_feature, graph_feat, label, _) = [self._to_cuda(d[i]) for d in data]
                 total_example_num += (batch_variable_map.max() + 1)
 
-
     def train(self):
         self.logger.write_log(f"[TRAIN LOOP] HYPERPARAMETERS: LR {self.lr}")
         self.logger.write_log(f"[TRAIN LOOP] NUM_EPOCHS: {self.n_epochs}")
