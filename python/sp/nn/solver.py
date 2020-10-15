@@ -573,7 +573,7 @@ class NeuralSurveyPropagatorSolver(PropagatorDecimatorSolverBase):
             function_classifier = None, dropout = 0, local_search_iterations = 0, epsilon = 0.05):
         super(NeuralSurveyPropagatorSolver, self).__init__(device = device, name = name,
             propagator = pdp_propagate.SurveyPropagator(device, decimator_dimension, include_adaptors = True),
-            decimator = pdp_decimate.NeuralDecimator(device, (3, 1), meta_data_dimension, decimator_dimension,
+            decimator = pdp_decimate.NeuralDecimator(device, (3, 2), meta_data_dimension, decimator_dimension,
                 mem_hidden_dimension, mem_agg_hidden_dimension, agg_hidden_dimension, edge_dimension, dropout),
             predictor = pdp_predict.NeuralPredictor(device, decimator_dimension, prediction_dimension, edge_dimension,
                 meta_data_dimension, mem_hidden_dimension, agg_hidden_dimension, mem_agg_hidden_dimension,

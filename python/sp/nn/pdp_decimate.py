@@ -49,7 +49,6 @@ class NeuralDecimator(nn.Module):
         self._mem_agg_hidden_dimension = mem_agg_hidden_dimension
         self.flag = False
 
-
     def forward(self, init_state, message_state, sat_problem, is_training, active_mask=None):
         if self.flag is False:
             print('-------------------------Decimate begin--------------------------\n')

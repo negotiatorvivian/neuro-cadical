@@ -8,6 +8,7 @@ import json
 import datetime
 import multiprocessing
 import time
+import yaml
 import torch.multiprocessing as mp
 
 from python.util import check_make_path, files_with_extension, load_data
@@ -15,6 +16,9 @@ from python.gnn import *
 from python.batch import Batcher
 from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
 from sp.factorgraph.dataset import DynamicBatchDivider
+from sp.nn.util import SatLossEvaluator
+from sp.trainer import Perceptron
+from sp.nn import solver
 
 
 def compute_softmax_kldiv_loss(logitss, probss):
@@ -35,7 +39,7 @@ def compute_softmax_kldiv_loss(logitss, probss):
         # print(logits.size())
         logits = F.log_softmax(logits, dim = 0)  # must be log-probabilities
         cl = F.kl_div(input = logits.view([1, logits.size(0)]), target = probs.view([1, probs.size(0)]),
-            reduction = "sum")
+                      reduction = "sum")
         # print("CL", cl)
         result += cl  # result += F.kl_div(logits, probs, reduction="none")
     result = result / float(len(probss))
@@ -203,7 +207,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
             num_g_nonzero_entries = torch.nonzero(g).size(0)
             if not num_g_entries == num_g_nonzero_entries:
                 print("G SIZE", num_g_entries, "LEN NONZEROS", num_g_nonzero_entries, "OH NO ZERO GRAD AT", name, g,
-                    "AHHHHHHHH")
+                      "AHHHHHHHH")
         except AttributeError:
             pass
 
@@ -268,8 +272,7 @@ class TrainLogger:
     def write_log(self, *args):
         # print(f"{datetime.datetime.now()}:", *args)
         with open(self.logfile, "a") as f:
-            print(*args, file = f)
-        #     print(f"{datetime.datetime.now()}:", *args, file = f)
+            print(*args, file = f)  # print(f"{datetime.datetime.now()}:", *args, file = f)
 
 
 class Trainer:
@@ -286,10 +289,11 @@ class Trainer:
     The `logger` attribute is a TrainLogger object, responsible for writing to training logs _and_ TensorBoard summaries.
     """
 
-    def __init__(self, model, dataset, hidden_dim, lr, root_dir, ckpt_freq, restore = False, n_steps = -1,
-            n_epochs = -1, index = 0, limit = 4000000, batch_replication = 1):
+    def __init__(self, model, dataset, config, lr, root_dir, ckpt_freq, restore = False, n_steps = -1, n_epochs = -1,
+            index = 0, limit = 4000000, batch_replication = 1):
         self.model = model
         self.dataset = dataset
+        self.config = config
         self.ckpt_dir = os.path.join(root_dir, "weights/")
         self.logger = TrainLogger(os.path.join(root_dir, "logs/"))
         self.ckpt_freq = ckpt_freq
@@ -301,8 +305,10 @@ class Trainer:
         self.device = torch.device("cuda" if self.CUDA_FLAG else "cpu")
         self.model.to(self.device)
         self.lr = lr
+        self._loss_evaluator = SatLossEvaluator(alpha = self.config['exploration'], device = self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr = self.lr, betas = (0.9, 0.98))
-        self.batch_divider = DynamicBatchDivider(limit // batch_replication, hidden_dim)
+        self.batch_divider = DynamicBatchDivider(limit // batch_replication, self.config['hidden_dim'])
+        self.model_list = [self._set_device(model) for model in self._build_graph(self.config)]
         util.check_make_path(self.ckpt_dir)
         if restore:
             try:
@@ -313,6 +319,101 @@ class Trainer:
     def _to_cuda(self, data):
         if isinstance(data, list):
             return data
+
+    def _set_device(self, model):
+        "Sets the CPU/GPU device."
+
+        if self.CUDA_FLAG:
+            return nn.DataParallel(model).cuda(self.device)
+        return model.cpu()
+
+    def _module(self, model):
+        return model.module if isinstance(model, nn.DataParallel) else model
+
+    def _build_graph(self, config):
+        model_list = []
+
+        if config['model_type'] == 'np-nd-np':
+            model_list += [solver.NeuralPropagatorDecimatorSolver(device = self.device, name = config['model_name'],
+                                                                  edge_dimension = config['edge_feature_dim'],
+                                                                  meta_data_dimension = config['meta_feature_dim'],
+                                                                  propagator_dimension = config['hidden_dim'],
+                                                                  decimator_dimension = config['hidden_dim'],
+                                                                  mem_hidden_dimension = config['mem_hidden_dim'],
+                                                                  agg_hidden_dimension = config['agg_hidden_dim'],
+                                                                  mem_agg_hidden_dimension = config[
+                                                                      'mem_agg_hidden_dim'],
+                                                                  prediction_dimension = config['prediction_dim'],
+                                                                  variable_classifier = Perceptron(config['hidden_dim'],
+                                                                                                   config[
+                                                                                                       'classifier_dim'],
+                                                                                                   config[
+                                                                                                       'prediction_dim']),
+                                                                  function_classifier = None,
+                                                                  dropout = config['dropout'],
+                                                                  local_search_iterations = config[
+                                                                      'local_search_iteration'],
+                                                                  epsilon = config['epsilon'])]
+
+        elif config['model_type'] == 'p-nd-np':
+            model_list += [solver.NeuralSurveyPropagatorSolver(device = self.device, name = config['model_name'],
+                                                               edge_dimension = config['edge_feature_dim'],
+                                                               meta_data_dimension = config['meta_feature_dim'],
+                                                               decimator_dimension = config['hidden_dim'],
+                                                               mem_hidden_dimension = config['mem_hidden_dim'],
+                                                               agg_hidden_dimension = config['agg_hidden_dim'],
+                                                               mem_agg_hidden_dimension = config['mem_agg_hidden_dim'],
+                                                               prediction_dimension = config['prediction_dim'],
+                                                               variable_classifier = Perceptron(config['hidden_dim'],
+                                                                                                config[
+                                                                                                    'classifier_dim'],
+                                                                                                config[
+                                                                                                    'prediction_dim']),
+                                                               function_classifier = None, dropout = config['dropout'],
+                                                               local_search_iterations = config[
+                                                                   'local_search_iteration'],
+                                                               epsilon = config['epsilon'])]
+
+        elif config['model_type'] == 'np-d-np':
+            model_list += [solver.NeuralSequentialDecimatorSolver(device = self.device, name = config['model_name'],
+                                                                  edge_dimension = config['edge_feature_dim'],
+                                                                  meta_data_dimension = config['meta_feature_dim'],
+                                                                  propagator_dimension = config['hidden_dim'],
+                                                                  decimator_dimension = config['hidden_dim'],
+                                                                  mem_hidden_dimension = config['mem_hidden_dim'],
+                                                                  agg_hidden_dimension = config['agg_hidden_dim'],
+                                                                  mem_agg_hidden_dimension = config[
+                                                                      'mem_agg_hidden_dim'],
+                                                                  classifier_dimension = config['classifier_dim'],
+                                                                  dropout = config['dropout'],
+                                                                  tolerance = config['tolerance'],
+                                                                  t_max = config['t_max'],
+                                                                  local_search_iterations = config[
+                                                                      'local_search_iteration'],
+                                                                  epsilon = config['epsilon'])]
+
+        elif config['model_type'] == 'p-d-p':
+            model_list += [solver.SurveyPropagatorSolver(device = self.device, name = config['model_name'],
+                                                         tolerance = config['tolerance'], t_max = config['t_max'],
+                                                         local_search_iterations = config['local_search_iteration'],
+                                                         epsilon = config['epsilon'])]
+
+        elif config['model_type'] == 'walk-sat':
+            model_list += [solver.WalkSATSolver(device = self.device, name = config['model_name'],
+                                                iteration_num = config['local_search_iteration'],
+                                                epsilon = config['epsilon'])]
+
+        elif config['model_type'] == 'reinforce':
+            model_list += [solver.ReinforceSurveyPropagatorSolver(device = self.device, name = config['model_name'],
+                                                                  pi = config['pi'], decimation_probability = config[
+                    'decimation_probability'], local_search_iterations = config['local_search_iteration'],
+                                                                  epsilon = config['epsilon'])]
+
+        if config['verbose']:
+            self.logger.write_log("The model parameter count is %d." % model_list[0].parameter_count())
+            self.logger.write_log("The model list is %s." % model_list)
+
+        return model_list
 
     def save_model(self, model, optimizer, ckpt_path):  # TODO(jesse): implement a CheckpointManager
         torch.save({
@@ -394,8 +495,8 @@ class Trainer:
             data = NMSDP_to_line(nmsdp)
             result.append(data)
         vn, fn, gm, ef, gf, l, md = zip(*result)
-        variable_num, function_num, graph_map, edge_feature, graph_feat, label, misc_data = \
-            self.batch_divider.divide(vn, fn, gm, ef, gf, l, md)
+        variable_num, function_num, graph_map, edge_feature, graph_feat, label, misc_data = self.batch_divider.divide(
+            vn, fn, gm, ef, gf, l, md)
         segment_num = len(variable_num)
 
         graph_feat_batch = []
@@ -439,17 +540,87 @@ class Trainer:
             batch_variable_map_batch += [torch.from_numpy(v_map_b).int()]
             batch_function_map_batch += [torch.from_numpy(f_map_b).int()]
 
-        return graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, graph_feat_batch, label_batch, misc_data
+        yield graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, \
+            graph_feat_batch, label_batch, misc_data
 
-    def train_sp(self, train_data):
+    def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
+            edge_feature, meta_data):
+        "Computes the loss function."
+
+        return loss(variable_prediction = prediction[0], label = label, graph_map = graph_map,
+                    batch_variable_map = batch_variable_map, batch_function_map = batch_function_map,
+                    edge_feature = edge_feature, meta_data = meta_data, global_step = model._global_step,
+                    eps = 1e-8 * torch.ones(1, device = self.device), max_coeff = 10.0,
+                    loss_sharpness = self.config['loss_sharpness'])
+
+    def get_parameter_list(self):
+        "Returns list of dictionaries with models' parameters."
+        return [{'params': filter(lambda p: p.requires_grad, model.parameters())} for model in self.model_list]
+
+    def train_sp(self, *train_data):
         total_example_num = 0
+        total_loss = np.zeros(len(self.model_list), dtype = np.float32)
+        print(self.get_parameter_list())
+        optimizer = optim.Adam(self.get_parameter_list(), lr = self.config['learning_rate'],
+                               weight_decay = self.config['weight_decay'])
         for (j, data) in enumerate(train_data):
             segment_num = len(data[0])
             for i in range(segment_num):
-                (graph_map, batch_variable_map, batch_function_map,
-                 edge_feature, graph_feat, label, _) = [self._to_cuda(d[i]) for d in data]
+                (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [
+                    d[i] for d in data]
                 total_example_num += (batch_variable_map.max() + 1)
+                self._train_sp_batch(total_loss, optimizer, graph_map, batch_variable_map, batch_function_map,
+                                  edge_feature, graph_feat, label)
 
+                del graph_map
+                del batch_variable_map
+                del batch_function_map
+                del edge_feature
+                del graph_feat
+                del label
+
+            for model in self.model_list:
+                self._module(model)._global_step += 1
+
+            return total_loss / total_example_num
+
+    def _train_sp_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
+            graph_feat, label):
+
+        optimizer.zero_grad()
+        lambda_value = torch.tensor([self.config['lambda']], dtype = torch.float32, device = self.device)
+
+        for (i, model) in enumerate(self.model_list):
+
+            state = self._module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, edge_feature,
+                                                       graph_feat, self.config['randomized'])
+
+            loss = torch.zeros(1, device = self.device)
+
+            for t in torch.arange(self.config['train_outer_recurrence_num'], dtype = torch.int32, device = self.device):
+
+                prediction, state = model(init_state = state, graph_map = graph_map,
+                                          batch_variable_map = batch_variable_map,
+                                          batch_function_map = batch_function_map, edge_feature = edge_feature,
+                                          meta_data = graph_feat, is_training = True,
+                                          iteration_num = self.config['train_inner_recurrence_num'])
+
+                loss += self._compute_loss(model = self._module(model), loss = self._loss_evaluator,
+                                           prediction = prediction, label = label, graph_map = graph_map,
+                                           batch_variable_map = batch_variable_map,
+                                           batch_function_map = batch_function_map, edge_feature = edge_feature,
+                                           meta_data = graph_feat) * lambda_value.pow(
+                    (self.config['train_outer_recurrence_num'] - t - 1).float())
+
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), self.config['clip_norm'])
+            total_loss[i] += loss.detach().cpu().numpy()
+
+            for s in state:
+                del s
+
+        optimizer.step()
+        return total_loss
 
     def train(self):
         self.logger.write_log(f"[TRAIN LOOP] HYPERPARAMETERS: LR {self.lr}")
@@ -462,13 +633,15 @@ class Trainer:
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             min_loss = np.zeros(1)
             for nmsdps in self.dataset:
-                data = self.transform_data(nmsdps)
-                self.train_sp(*data)
+                for data in self.transform_data(nmsdps):
+                    self.train_sp(data)
 
-                drat_loss, core_loss, core_clause_loss, \
-                loss, grad_norm, l2_loss = train_step(self.model, batcher, self.optimizer, nmsdps,
-                                                      device = self.device, CUDA_FLAG = self.CUDA_FLAG,
-                                                      use_NMSDP_to_sparse2 = True, use_glue_counts = False)
+                drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
+                                                                                              self.optimizer, nmsdps,
+                                                                                              device = self.device,
+                                                                                              CUDA_FLAG = self.CUDA_FLAG,
+                                                                                              use_NMSDP_to_sparse2 = True,
+                                                                                              use_glue_counts = False)
                 if epoch_count % 10 == 0 and self.GLOBAL_STEP_COUNT % 10 == 0:
                     self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
@@ -486,7 +659,9 @@ class Trainer:
                     if self.GLOBAL_STEP_COUNT >= self.n_steps:
                         break
         if not saved:
-            self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT, "last", force_save = True)  # save at the end of every epoch regardless
+            self.maybe_save_ckpt(self.GLOBAL_STEP_COUNT, "last",
+                                 force_save = True)  # save at the end of every epoch regardless
+
 
 # def gen_nmsdp_batch(k):
 #     nmsdps = []
@@ -504,6 +679,7 @@ def _parse_main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--cfg", type = str, dest = "cfg", action = "store")
+    parser.add_argument("--sp-cfg", type = str, dest = "sp_cfg", action = "store")
     parser.add_argument("--lr", type = float, dest = "lr", action = "store")
     parser.add_argument("--data-dir", type = str, dest = "data_dir", action = "store")
     parser.add_argument("--batch-size", type = int, dest = "batch_size", action = "store")
@@ -529,11 +705,13 @@ def _main_train1(cfg = None, opts = None):
         # cfg = defaultGNN1Cfg
         with open(opts.cfg, "r") as f:
             cfg = json.load(f)
+        with open(opts.sp_cfg, 'r') as f:
+            sp_cfg = yaml.load(f)
 
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers, 'nmsdp')
-    trainer = Trainer(model, dataset, 150, opts.lr, root_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq,
+    trainer = Trainer(model, dataset, sp_cfg, opts.lr, root_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq,
                       restore = False, n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
@@ -550,7 +728,7 @@ def _test_trainer(opts = None):
     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
     trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
-        n_steps = opts.n_steps)
+                      n_steps = opts.n_steps)
     for _ in range(5):
         trainer.train()  # trainer.load_latest_ckpt()
 
