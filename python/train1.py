@@ -104,7 +104,7 @@ def NMSDP_to_line(nmsdp):
     return (n_vars, n_cls, indices, edge_features, None, float(result), [])
 
 
-def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False,
+def train_step(model, batcher, optim, prediction, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False,
         use_NMSDP_to_sparse2 = True, use_glue_counts = True):
     # the flag use_NMSDP_to_sparse2 should be True when we use mk_H5DataLoader instead of iterating over the H5Dataset directly, because DataLoader
     # does magic conversions from numpy arrays to torch tensors
@@ -171,7 +171,8 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
         core_clause_loss = 0
     else:
         drat_loss = compute_softmax_kldiv_loss_from_logits(V_drat_logitss, var_lemma_countss, tau = 1.0)
-        core_loss = compute_mask_loss(V_core_logitss, core_var_masks)
+        # core_loss = compute_mask_loss(torch.cat(V_core_logitss).unsqueeze(1), [prediction[0].detach()])
+        # core_loss = compute_mask_loss(V_core_logitss, core_var_masks)
         core_clause_loss = compute_mask_loss(C_core_logitss, core_clause_masks)
     # core_loss = 0
     # core_clause_loss = 0
@@ -188,7 +189,8 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
     # print("EXAMPLE CORE CLAUSE MASK", core_clause_masks[0])
     # print("EXAMPLE DRAT VAR COUNT", var_lemma_countss[0])
 
-    loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
+    # loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
+    loss = drat_loss + 0.01 * core_clause_loss + l2_loss
     print('loss:', loss)
     # loss = drat_loss
     loss.backward()
@@ -216,7 +218,7 @@ def train_step(model, batcher, optim, nmsdps, device = torch.device("cpu"), CUDA
 
     optim.step()
 
-    return drat_loss, core_loss, core_clause_loss, loss, x, l2_loss
+    return drat_loss, core_clause_loss, loss, x, l2_loss
 
 
 def train_step2(model, optim, nmsdps, device = torch.device("cpu"), CUDA_FLAG = False, use_NMSDP_to_sparse2 = False):
@@ -540,8 +542,7 @@ class Trainer:
             batch_variable_map_batch += [torch.from_numpy(v_map_b).int()]
             batch_function_map_batch += [torch.from_numpy(f_map_b).int()]
 
-        yield graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, \
-            graph_feat_batch, label_batch, misc_data
+        yield graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, graph_feat_batch, label_batch, misc_data
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
             edge_feature, meta_data):
@@ -563,14 +564,15 @@ class Trainer:
         print(self.get_parameter_list())
         optimizer = optim.Adam(self.get_parameter_list(), lr = self.config['learning_rate'],
                                weight_decay = self.config['weight_decay'])
+        prediction = None
         for (j, data) in enumerate(train_data):
             segment_num = len(data[0])
             for i in range(segment_num):
-                (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [
-                    d[i] for d in data]
+                (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in
+                    data]
                 total_example_num += (batch_variable_map.max() + 1)
-                self._train_sp_batch(total_loss, optimizer, graph_map, batch_variable_map, batch_function_map,
-                                  edge_feature, graph_feat, label)
+                prediction = self._train_sp_batch(total_loss, optimizer, graph_map, batch_variable_map,
+                                                  batch_function_map, edge_feature, graph_feat, label)
 
                 del graph_map
                 del batch_variable_map
@@ -582,13 +584,14 @@ class Trainer:
             for model in self.model_list:
                 self._module(model)._global_step += 1
 
-            return total_loss / total_example_num
+        return prediction
 
     def _train_sp_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
             graph_feat, label):
 
         optimizer.zero_grad()
         lambda_value = torch.tensor([self.config['lambda']], dtype = torch.float32, device = self.device)
+        prediction = None
 
         for (i, model) in enumerate(self.model_list):
 
@@ -620,7 +623,7 @@ class Trainer:
                 del s
 
         optimizer.step()
-        return total_loss
+        return prediction
 
     def train(self):
         self.logger.write_log(f"[TRAIN LOOP] HYPERPARAMETERS: LR {self.lr}")
@@ -633,18 +636,20 @@ class Trainer:
             self.logger.write_log(f"[TRAIN LOOP] STARTING EPOCH {epoch_count}")
             min_loss = np.zeros(1)
             for nmsdps in self.dataset:
+                prediction = torch.ones(1)
                 for data in self.transform_data(nmsdps):
-                    self.train_sp(data)
+                    prediction = self.train_sp(data)
 
-                drat_loss, core_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher,
-                                                                                              self.optimizer, nmsdps,
-                                                                                              device = self.device,
-                                                                                              CUDA_FLAG = self.CUDA_FLAG,
-                                                                                              use_NMSDP_to_sparse2 = True,
-                                                                                              use_glue_counts = False)
+                drat_loss, core_clause_loss, loss, grad_norm, l2_loss = train_step(self.model, batcher, self.optimizer,
+                                                                                   prediction, nmsdps,
+                                                                                   device = self.device,
+                                                                                   CUDA_FLAG = self.CUDA_FLAG,
+                                                                                   use_NMSDP_to_sparse2 = True,
+                                                                                   use_glue_counts = False)
+
                 if epoch_count % 10 == 0 and self.GLOBAL_STEP_COUNT % 10 == 0:
                     self.logger.write_scalar("drat_loss", drat_loss, self.GLOBAL_STEP_COUNT)
-                    self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
+                    # self.logger.write_scalar("core_loss", core_loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("core_clause_loss", core_clause_loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("total_loss", loss, self.GLOBAL_STEP_COUNT)
                     self.logger.write_scalar("LAST GRAD NORM", grad_norm, self.GLOBAL_STEP_COUNT)

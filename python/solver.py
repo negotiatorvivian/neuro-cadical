@@ -162,6 +162,7 @@ class StatHolder:
                 glr = float(result_dict["conflicts"] / result_dict["decisions"])
             except ZeroDivisionError:
                 glr = 0
+            print(result_dict)
             self.stats[instance_name] = {
                 "status": result_dict["result"] is not None, "rtime": result_dict["cpu_time"],
                 "decisions": result_dict["decisions"], "propagations": result_dict["propagations"],
