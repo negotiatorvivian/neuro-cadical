@@ -5,9 +5,10 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import scipy.signal
+from pysat.formula import CNF
 import time
 import os
-import yaml, csv
+import yaml
 import json
 import ray
 from ray.util import ActorPool
@@ -17,13 +18,12 @@ import tempfile
 from uuid import uuid4
 
 from satenv import SatEnv
-from gnn import defaultGNN1Cfg
+from gnn import defaultGNN1Cfg, Base
 from gnn import rl_GNN1 as GNN1
 from batch import Batcher
 from util import files_with_extension, recursively_get_files, load_data, set_env
-from aggregators import Encoder, MeanAggregator, SupervisedGraphSage
-from base import PropagatorSolverBase
-from train1 import TrainLogger
+from data_util import coo
+from train1 import TrainLogger, Trainer
 
 
 def discount_cumsum(x, discount = 1):
@@ -45,7 +45,7 @@ def discount_cumsum(x, discount = 1):
 
 
 def mk_G(CL_idxs):
-    print(CL_idxs.C_idxs, CL_idxs.L_idxs)
+    # print(CL_idxs.C_idxs, CL_idxs.L_idxs)
     C_idxs = np.array(CL_idxs.C_idxs, dtype = "int32")
     L_idxs = np.array(CL_idxs.L_idxs, dtype = "int32")
     indices = torch.stack([torch.as_tensor(C_idxs).to(torch.long), torch.as_tensor(L_idxs).to(torch.long)])
@@ -64,7 +64,7 @@ def softmax_all_from_logits(logits, length):
     return torch.multinomial(probs, length).cpu().numpy()
 
 
-def sample_trajectory(agent, env, logger):
+def sample_trajectory(agent, env, cnf, logger):
     """
     Samples a trajectory from the environment and then resets it. This assumes the environment has been initialized.
     """
@@ -73,6 +73,7 @@ def sample_trajectory(agent, env, logger):
     actions = []
     rewards = []
     value_estimates = []
+    cnfs = [cnf]
 
     CL_idxs = env.render()
     terminal_flag = False
@@ -89,14 +90,35 @@ def sample_trajectory(agent, env, logger):
     # when jump out  of the loop, CL_idxs.C_idxs is []
     logger.write_log(f"actions: {actions}, rewards: {rewards}, value_estimate: {value_estimates}")
     env.reset()
-    return Gs, mu_logitss, actions, rewards, value_estimates
+    return Gs, mu_logitss, actions, rewards, value_estimates, cnfs
 
 
-def process_trajectory(Gs, mu_logitss, actions, rewards, vals, last_val = 0, gam = 1.0, lam = 1.0):
+def cnf_to_data(cnfs):
+    results = []
+    for cnf in cnfs:
+        n_vars = cnf.nv
+        n_cls = len(cnf.clauses)
+        C_idxs, L_idxs = coo(cnf)
+        signs = np.array([1] * (2 * n_vars))
+        signs[cnf.nv:] = -1
+        edge_features = signs[L_idxs]
+        L_idxs = L_idxs
+        L_idxs[L_idxs > n_vars - 1] -= n_vars
+        indices = torch.stack([torch.from_numpy(L_idxs).type(torch.long), torch.from_numpy(C_idxs).type(torch.long)])
+        result = cnf.is_sat
+        answers = cnf.answers
+        results.append((n_vars, n_cls, indices, edge_features, answers, float(result), []))
+    # return torch.sparse.FloatTensor(indices = indices, values = torch.from_numpy(edge_features), size = size)
+    return results
+
+
+def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnf, last_val = 0, gam = 1.0, lam = 1.0):
     gs = discount_cumsum(rewards, int(gam))
-    deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[:-1]  # future advantage
+    deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
+    :-1]  # future advantage
     adv = discount_cumsum(deltas, int(gam * lam))
-    return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0]  # note, gs[0] is total value
+    data = cnf_to_data(cnf)
+    return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data  # note, gs[0] is total value
 
 
 class Agent:
@@ -124,7 +146,7 @@ class NeuroAgent(Agent):
             self.model.load_state_dict(model_state_dict)
 
     def act(self, G):
-        p_logits, v_pre_logits = self.model(G)
+        p_logits, v_pre_logits, _, _ = self.model(G)
         return p_logits.squeeze().detach(), torch.sigmoid(v_pre_logits.mean()).detach()
 
     def set_weights(self, model_state_dict):
@@ -133,7 +155,7 @@ class NeuroAgent(Agent):
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
     def __init__(self, buf, weight_manager, logdir, model_cfg = defaultGNN1Cfg, model_state_dict = None,
-                 from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
+            from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
         self.logger = TrainLogger(logdir = logdir)
@@ -142,7 +164,6 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             np.random.seed(seed)
         if from_cnf is not None or from_file is not None:
             self.set_env(from_cnf, from_file)
-            cl_indices = self.env.render()
 
         self.sync_freq = sync_freq
         self.ckpt_rank = 0
@@ -153,31 +174,29 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
         print("WORKER INITIALIZED")
 
     def set_env(self, from_cnf = None, from_file = None):
+        paths = from_file.split('/')
+        from_cnf = os.path.join('/'.join(paths[:-1]) + '-answers', paths[-1])
         if from_cnf is not None:
-            self.td = tempfile.TemporaryDirectory()
-            cnf_path = os.path.join(self.td.name, str(uuid4()) + ".cnf")
-            from_cnf.to_file(cnf_path)
+            # self.td = tempfile.TemporaryDirectory()
+            # cnf_path = os.path.join(self.td.name, str(uuid4()) + ".cnf")
+            # from_cnf.to_file(cnf_path)
             try:
-                self.env = SatEnv(cnf_path)
+                # self.env = SatEnv(cnf_path)
+                self.cnf = CNF(from_file = from_cnf)
+                print(f'self.cnf: {self.cnf}')
             except RuntimeError as e:
-                print("BAD CNF:", cnf_path)
-            raise e
-        elif from_file is not None:
+                print("BAD CNF:", from_cnf)
+                raise e
+        if from_file is not None:
             try:
                 self.env = SatEnv(from_file)
+
             except RuntimeError as e:
                 print("BAD CNF:", from_file)
-                raise e
-        else:
-            raise Exception("must set env with CNF or file")
-
-    def convert_indices(self, indices):
-        variable_num, function_num = indices.n_vars, indices.n_clauses
-        variable_ind = indices.L_idxs
-        function_ind = indices.C_idxs
+                raise e  # else:  #     raise Exception("must set env with CNF or file")
 
     def sample_trajectory(self):
-        tau = sample_trajectory(self.agent, self.env, self.logger)
+        tau = sample_trajectory(self.agent, self.env, self.cnf, self.logger)
         self.buf.ingest_trajectory.remote(process_trajectory(*tau))
         print(f"SAMPLED TRAJECTORY OF LENGTH {len(tau[0])}")
         self.trajectory_count += 1
@@ -220,11 +239,11 @@ class ReplayBuffer:
         return self.episode_count
 
     def ingest_trajectory(self, tau):
-        Gs, mu_logitss, actions, gs, advs, total_return = tau
+        Gs, mu_logitss, actions, gs, advs, total_return, cnfs = tau
         # print(gs)
         self.writer.add_scalar("total return", total_return, self.episode_count)
-        for G, mu_logits, action, g, adv in zip(Gs, mu_logitss, actions, gs, advs):
-            self.queue.put((G, mu_logits, action, g, adv))
+        for G, mu_logits, action, g, adv, cnf in zip(Gs, mu_logitss, actions, gs, advs, cnfs):
+            self.queue.put((G, mu_logits, action, g, adv, cnfs))
 
         print(f"TOTAL RETURN: {gs[0]}")
         self.episode_count += 1
@@ -241,19 +260,22 @@ class ReplayBuffer:
             actions = []
             gs = []
             advs = []
+            cnfs = []
+
             for _ in range(batch_size):
-                G, mu_logits, action, g, adv = self.queue.get()
+                G, mu_logits, action, g, adv, cnf = self.queue.get()
                 Gs.append(G)
                 mu_logitss.append(mu_logits)
                 actions.append(action)
                 gs.append(g)
                 advs.append(adv)
+                cnfs.append(cnf)
                 self.logger.write_log(f'action:{action}, g:{g}, adv:{adv}')
-            return Gs, mu_logitss, actions, gs, advs
+            return Gs, mu_logitss, actions, gs, advs, cnfs
 
 
-def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs,
-               device = torch.device("cpu")):
+def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
+        device = torch.device("cpu")):
     """
     Calculate loss and perform a single gradient update. Returns a dictionary of statistics.
 
@@ -265,11 +287,11 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     gs: list of returns
     advs: list of advantages
     """
-    # print(nodes, labels)
     agg_loss = None
     if graphsage is not None:
         agg_loss = graphsage.loss(nodes, labels)
-    pre_policy_logitss, pre_unreduced_value_logitss = model(G)
+
+    pre_policy_logitss, pre_unreduced_value_logitss = model(G, cnfs)
     policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
     actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
     advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
@@ -277,7 +299,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
     mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
     rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
-                        enumerate(zip(policy_distribs, mu_distribs))])
+                           enumerate(zip(policy_distribs, mu_distribs))])
 
     psis = advs * rhos
     print(f'advs:{advs}, rhos: {rhos}')
@@ -304,6 +326,49 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 
     optim.step()
 
+    return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
+
+
+def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
+        device = torch.device("cpu")):
+    for data in model.transform_data(cnfs):
+        agg_loss = None
+        if graphsage is not None:
+            agg_loss = graphsage.loss(nodes, labels)
+        pre_policy_logitss, pre_unreduced_value_logitss = model(G, data)
+        policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
+        actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
+        advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
+
+        policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
+        mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
+        rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
+                               enumerate(zip(policy_distribs, mu_distribs))])
+
+        psis = advs * rhos
+        print(f'advs:{advs}, rhos: {rhos}')
+        log_probs = torch.empty(batch_size).to(device)
+        for i in range(batch_size):
+            log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
+
+        p_loss = -(log_probs * psis).mean()
+        # v^
+        vals = torch.sigmoid(
+            torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
+        # print(f'vals:{vals}, gs: {gs}')
+
+        v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
+        loss = p_loss + 0.1 * v_loss
+        if agg_loss:
+            loss += agg_loss
+
+        loss.backward()
+        print('total_loss', loss.detach().cpu().numpy())
+
+        nn.utils.clip_grad_value_(model.parameters(), 100)
+        nn.utils.clip_grad_norm_(model.parameters(), 10)
+
+        optim.step()
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
@@ -379,7 +444,7 @@ class WeightManager:
             f.write(json.dumps(cfg_dict, indent = 2))
 
     def save_ckpt(self, model_state_dict, optim_state_dict, save_counter, GLOBAL_STEP_COUNT, episode_count,
-                  name = 'best'):
+            name = 'best'):
         self.model_state_dict = model_state_dict
         self.optim_state_dict = optim_state_dict
         self.save_counter = save_counter
@@ -396,7 +461,7 @@ class WeightManager:
 # let's try single-GPU training for now
 class Learner:
     def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, log_dir, ckpt_dir,
-                 ckpt_freq, lr, restore = True, model_cfg = defaultGNN1Cfg):
+            ckpt_freq, lr, sp_config, restore = True, model_cfg = defaultGNN1Cfg):
         self.encode_dim = encode_dim
         self.feature_dim = feature_dim
         self.num_samples = num_samples
@@ -411,17 +476,19 @@ class Learner:
         self.logger = TrainLogger(logdir = self.logdir)
         self.GLOBAL_STEP_COUNT = 0
         self.save_counter = 0
-        self.model = GNN1(**model_cfg)
-        self.optim = torch.optim.Adam(self.model.parameters(), lr = self.lr)
         if torch.cuda.is_available():
             print("[LEARNER] USING GPU")
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")
-
+        # self.model = GNN1(model_cfg, {'config': sp_config, 'cpu': True, 'logger': self.logger})
+        self.model = Base(sp_config, model_cfg, sp_config['limit'], self.device, self.batcher, {
+            'cpu': True, 'logger': self.logger
+        })
+        self.rl_model = GNN1(model_cfg)
+        self.optim = torch.optim.Adam(self.model.parameters, lr = self.lr)
         self.batcher = Batcher()
         if restore:
-            # print('------load_latest_ckpt------')
             ckpt = ray.get(self.weight_manager.load_latest_ckpt.remote())
             if ckpt is not None:
                 self.set_weights(ckpt)
@@ -431,10 +498,15 @@ class Learner:
             self.writer.add_text(name, str(value), self.GLOBAL_STEP_COUNT)
             self.writer.add_scalar(name, value, self.GLOBAL_STEP_COUNT)
 
-    def train_batch(self, Gs, mu_logitss, actions, gs, advs):
+    def data_loader(self):
+        yield ray.get(self.buf.get_batch.remote(self.batch_size))
+
+    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
         self.logger.write_log(f"G: {G.size()}")
+        print(f"G: {G.size()}")
+
         # x_dim = G.size()[0]
         # y_dim = G.size()[1]
         # features = nn.Embedding(x_dim, y_dim)
@@ -456,8 +528,8 @@ class Learner:
         #     lr = self.lr)
         # stats = train_step(graphsage, self.model, self.optim, self.batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs,
         #                    advs, device = self.device)
-        stats = train_step(self.model, self.optim, self.batcher, G, batch_size, None, None, None, mu_logitss, actions,
-                           gs, advs, device = self.device)
+        stats = train_batch(self.model, self.optim, self.batcher, G, batch_size, None, None, None, mu_logitss, actions,
+                            gs, advs, cnfs, device = self.device)
         self.write_stats(stats)
         return stats.get('p_loss') + stats.get('v_loss')
 
@@ -522,9 +594,7 @@ class Learner:
                     self.save_ckpt(False)
                     loss = temp
                 del batch
-                self.GLOBAL_STEP_COUNT += 1
-                # if self.GLOBAL_STEP_COUNT % self.ckpt_freq == 0:
-                #     self.save_ckpt()
+                self.GLOBAL_STEP_COUNT += 1  # if self.GLOBAL_STEP_COUNT % self.ckpt_freq == 0:  #     self.save_ckpt()
         finally:
             print("Finishing up and saving checkpoint.")
             if self.optim:
@@ -569,6 +639,7 @@ def _parse_main():
         os.makedirs(opts.log_dir)
     with open(opts.sp_cfg, 'r') as f:
         config = yaml.load(f)
+        opts.sp_config = config
 
     return opts
 
@@ -602,8 +673,9 @@ def _main(is_train = True):
     learner = ray.remote(num_gpus = (0 if torch.cuda.is_available() else 0))(Learner).remote(
         encode_dim = opts.encode_dim, feature_dim = opts.feature_dim, num_samples = opts.num_samples, buf = buf,
         weight_manager = weight_manager, batch_size = opts.batch_size, log_dir = opts.log_dir,
-        ckpt_freq = opts.ckpt_freq, ckpt_dir = opts.ckpt_dir, lr = opts.lr, restore = not is_train,
-        model_cfg = model_cfg)  # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they
+        ckpt_freq = opts.ckpt_freq, ckpt_dir = opts.ckpt_dir, lr = opts.lr, sp_config = opts.sp_config,
+        restore = not is_train, model_cfg = model_cfg)
+    # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they
     # TODO:  are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
     workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, logdir = opts.log_dir,
                                                 model_cfg = model_cfg) for _ in range(opts.n_workers)]
@@ -628,4 +700,4 @@ def _main(is_train = True):
 
 
 if __name__ == "__main__":
-    _main(False)
+    _main(True)

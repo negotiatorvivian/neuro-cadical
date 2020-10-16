@@ -234,3 +234,25 @@ def mk_H5DataLoader(data_dir, batch_size, num_workers, type = 'lbdp'):
 
     return td.DataLoader(h5d, batch_size = 1, num_workers = num_workers, worker_init_fn = h5_worker_init_fn,
         pin_memory = True)
+
+
+def coo(fmla):
+    C_result = []
+    L_result = []
+    clause_values = [0] * len(fmla.clauses)
+    edge_features = []
+    for cls_idx in range(len(fmla.clauses)):
+        for lit in fmla.clauses[cls_idx]:
+            if lit > 0:
+                edge_features.append(1)
+                clause_values[cls_idx] = 1
+                lit_enc = lit - 1
+            else:
+                edge_features.append(0)
+                lit_enc = fmla.nv + abs(lit) - 1
+
+            C_result.append(cls_idx)
+            L_result.append(lit_enc)
+    variable_ind = np.abs(np.array(L_result, dtype = np.int32))
+    function_ind = np.abs(np.array(C_result, dtype = np.int32))
+    return function_ind, variable_ind

@@ -19,6 +19,7 @@ from sp.factorgraph.dataset import DynamicBatchDivider
 from sp.nn.util import SatLossEvaluator
 from sp.trainer import Perceptron
 from sp.nn import solver
+import util
 
 
 def compute_softmax_kldiv_loss(logitss, probss):
@@ -276,6 +277,9 @@ class TrainLogger:
         with open(self.logfile, "a") as f:
             print(*args, file = f)  # print(f"{datetime.datetime.now()}:", *args, file = f)
 
+    def info(self, *args):
+        self.write_log(*args)
+
 
 class Trainer:
     """
@@ -296,8 +300,12 @@ class Trainer:
         self.model = model
         self.dataset = dataset
         self.config = config
-        self.ckpt_dir = os.path.join(root_dir, "weights/")
-        self.logger = TrainLogger(os.path.join(root_dir, "logs/"))
+        if len(root_dir) == 1:
+            self.ckpt_dir = os.path.join(root_dir[0], "weights/")
+            self.logger = TrainLogger(os.path.join(root_dir[0], "logs/"))
+        else:
+            self.ckpt_dir = root_dir[0]
+            self.logger = root_dir[1]
         self.ckpt_freq = ckpt_freq
         self.save_counter = 0
         self.GLOBAL_STEP_COUNT = 0
@@ -716,7 +724,7 @@ def _main_train1(cfg = None, opts = None):
     model = GNN1(**cfg)
 
     dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers, 'nmsdp')
-    trainer = Trainer(model, dataset, sp_cfg, opts.lr, root_dir = opts.ckpt_dir, ckpt_freq = opts.ckpt_freq,
+    trainer = Trainer(model, dataset, sp_cfg, opts.lr, root_dir = [opts.ckpt_dir], ckpt_freq = opts.ckpt_freq,
                       restore = False, n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
     if opts.forever is True:
