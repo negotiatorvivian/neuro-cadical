@@ -172,7 +172,7 @@ def train_step(model, batcher, optim, prediction, nmsdps, device = torch.device(
     else:
         drat_loss = compute_softmax_kldiv_loss_from_logits(V_drat_logitss, var_lemma_countss, tau = 1.0)
         # core_loss = compute_mask_loss(torch.cat(V_core_logitss).unsqueeze(1), [prediction[0].detach()])
-        # core_loss = compute_mask_loss(V_core_logitss, core_var_masks)
+        core_loss = compute_mask_loss(V_core_logitss, core_var_masks)
         core_clause_loss = compute_mask_loss(C_core_logitss, core_clause_masks)
     # core_loss = 0
     # core_clause_loss = 0
@@ -189,8 +189,8 @@ def train_step(model, batcher, optim, prediction, nmsdps, device = torch.device(
     # print("EXAMPLE CORE CLAUSE MASK", core_clause_masks[0])
     # print("EXAMPLE DRAT VAR COUNT", var_lemma_countss[0])
 
-    # loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
-    loss = drat_loss + 0.01 * core_clause_loss + l2_loss
+    loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
+    # loss = drat_loss + 0.01 * core_clause_loss + l2_loss
     print('loss:', loss)
     # loss = drat_loss
     loss.backward()

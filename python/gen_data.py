@@ -155,11 +155,13 @@ def coo(fmla):
     graph_map = np.stack((unbatch_variable_ind, function_ind))
     mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_features)).squeeze().float(),
                                    [fmla.nv, len(fmla.clauses)]).unsqueeze(1).to_dense()
-    core_var_mask = np.ones(fmla.nv, dtype = np.int32)
-    core_clause_mask = np.ones(len(fmla.clauses), dtype = np.int32)
-    return function_ind, variable_ind, np.array(clause_values, dtype = "int32"), np.array(edge_features,
-                                                                                          dtype = "int32"), mask, \
-        core_var_mask, core_clause_mask
+    if fmla.is_sat:
+        core_var_mask = np.sign(fmla.answers, dtype = np.int32)
+        core_clause_mask = np.ones(len(fmla.clauses), dtype = np.int32)
+    else:
+        core_var_mask = np.ones(fmla.nv, dtype = np.int32)
+        core_clause_mask = np.array(clause_values, dtype = "int32")
+    return function_ind, variable_ind, np.array(clause_values, dtype = "int32"), mask, core_var_mask, core_clause_mask
 
 
 def lbdcdl(cnf_dir, cnf, llpath, dump_dir = None, dumpfreq = 50e3, timeout = None, clause_limit = 1e6):
@@ -202,7 +204,7 @@ def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dum
             for idx, line in enumerate(f):
                 counts[idx] = int(line.split()[1])
 
-    C_idxs, L_idxs, clause_values, _, _, _, _ = coo(fmla)
+    C_idxs, L_idxs, clause_values,  _, _, _ = coo(fmla)
     n_clauses = len(fmla.clauses)
 
     lbdp = LBDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
@@ -218,6 +220,7 @@ def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), du
     clause_limit = int(clause_limit)
     fmla = cnf
     counts = np.zeros(fmla.nv)
+    is_sat = fmla.is_sat
     n_vars = fmla.nv
     n_clauses = len(fmla.clauses)
     name = str(uuid.uuid4())
@@ -229,14 +232,14 @@ def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), du
             for idx, line in enumerate(f):
                 counts[idx] = int(line.split()[1])
 
-    C_idxs, L_idxs, clause_values, edge_features, mask, core_var_mask, core_clause_mask = coo(fmla)
+    C_idxs, L_idxs, clause_values, mask, core_var_mask, core_clause_mask = coo(fmla)
     var_lemma_counts = lemma_occ(mask)
-    n_clauses = len(fmla.clauses)
 
     nmsdp = NMSDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
-                  n_vars = np.array([n_vars], dtype = "int32"), n_clauses = np.array([n_clauses], dtype = "int32"),
-                  C_idxs = np.array(C_idxs), L_idxs = np.array(L_idxs), core_var_mask = core_var_mask,
-                  core_clause_mask = core_clause_mask, var_lemma_counts = var_lemma_counts)
+                  is_sat = np.array([is_sat], dtype = "bool"), n_vars = np.array([n_vars], dtype = "int32"),
+                  n_clauses = np.array([n_clauses], dtype = "int32"), C_idxs = np.array(C_idxs),
+                  L_idxs = np.array(L_idxs), core_var_mask = core_var_mask, core_clause_mask = core_clause_mask,
+                  var_lemma_counts = var_lemma_counts)
 
     return nmsdp
 

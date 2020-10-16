@@ -15,11 +15,12 @@ import torch.utils.data as td
 from util import *
 
 NMSDP = collections.namedtuple(  # all fields besides dp_id must be numpy arrays
-    "NMSDP", ["dp_id", "is_train", "n_vars", "n_clauses", "C_idxs", "L_idxs", "core_var_mask", "core_clause_mask",
+    "NMSDP", ["dp_id", "is_train", "is_sat", "n_vars", "n_clauses", "C_idxs", "L_idxs", "core_var_mask",
+        "core_clause_mask",
               "var_lemma_counts"])
 
 LBDP = collections.namedtuple(  # all fields besides dp_id must be numpy arrays
-    "LBDP", ["dp_id", "is_train", "n_vars", "n_clauses", "C_idxs", "L_idxs", "clause_values", "glue_counts"])
+    "LBDP", ["dp_id", "is_train", "is_sat", "n_vars", "n_clauses", "C_idxs", "L_idxs", "clause_values", "glue_counts"])
 
 
 def serialize_lbdp(lbdp, f):
@@ -27,7 +28,7 @@ def serialize_lbdp(lbdp, f):
 
 
 def deserialize_lbdp(grp, dp_id):
-    return LBDP(dp_id = dp_id, is_train = grp["is_train"][()], n_vars = grp["n_vars"][()],
+    return LBDP(dp_id = dp_id, is_train = grp["is_train"][()], is_sat = grp["is_sat"][()], n_vars = grp["n_vars"][()],
         n_clauses = grp["n_clauses"][()], C_idxs = grp["C_idxs"][()], L_idxs = grp["L_idxs"][()],
         clause_values = grp["clause_values"][()], glue_counts = grp["glue_counts"][()])
 
@@ -44,7 +45,7 @@ def serialize_nmsdp(nmsdp, f):
 
 
 def deserialize_nmsdp(grp, dp_id):
-    return NMSDP(dp_id = dp_id, is_train = grp["is_train"][()], n_vars = grp["n_vars"][()],
+    return NMSDP(dp_id = dp_id, is_train = grp["is_train"][()], is_sat = grp["is_sat"][()],  n_vars = grp["n_vars"][()],
         n_clauses = grp["n_clauses"][()], C_idxs = grp["C_idxs"][()], L_idxs = grp["L_idxs"][()],
         core_var_mask = grp["core_var_mask"][()], core_clause_mask = grp["core_clause_mask"][()],
         var_lemma_counts = grp["var_lemma_counts"][()])
