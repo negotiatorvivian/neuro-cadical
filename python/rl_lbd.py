@@ -482,7 +482,7 @@ class Learner:
         else:
             self.device = torch.device("cpu")
         # self.model = GNN1(model_cfg, {'config': sp_config, 'cpu': True, 'logger': self.logger})
-        self.model = Base(sp_config, model_cfg, sp_config['limit'], self.device, self.batcher, {
+        self.model = Base(sp_config, model_cfg, sp_config['train_batch_limit'], self.device, self.batcher, {
             'cpu': True, 'logger': self.logger
         })
         self.rl_model = GNN1(model_cfg)
