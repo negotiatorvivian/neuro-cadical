@@ -335,7 +335,7 @@ def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, 
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
-        pre_policy_logitss, pre_unreduced_value_logitss = model(G, data)
+        pre_policy_logitss, pre_unreduced_value_logitss = model.train(G, data)
         policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
         actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
