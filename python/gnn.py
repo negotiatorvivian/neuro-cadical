@@ -235,7 +235,8 @@ class Base(base.FactorGraphTrainerBase):
         self._cnf_evaluator = SatCNFEvaluator(device = self._device)
         self._counter = 0
         self._max_coeff = 10.0
-        self.batch_divider = dataset.DynamicBatchDivider(self.config['train_batch_limit'] // batch_replication, self.config['hidden_dim'])
+        self.batch_divider = dataset.DynamicBatchDivider(self.config['train_batch_limit'] // batch_replication,
+                                                         self.config['hidden_dim'])
         self._model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
@@ -302,9 +303,12 @@ class Base(base.FactorGraphTrainerBase):
                 (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in
                     data]
                 total_example_num += (batch_variable_map.max() + 1)
-                batched_V_drat_logits, batched_v_pre_logits = self.train_batch(total_loss, optimizer, graph_map,
-                                                                               batch_variable_map, batch_function_map,
-                                                                               edge_feature, graph_feat, label, G)
+                batched_V_drat_logits, batched_v_pre_logits, prediction = self.train_batch(total_loss, optimizer,
+                                                                                           graph_map,
+                                                                                           batch_variable_map,
+                                                                                           batch_function_map,
+                                                                                           edge_feature, graph_feat,
+                                                                                           label, G)
 
                 del graph_map
                 del batch_variable_map
@@ -315,7 +319,7 @@ class Base(base.FactorGraphTrainerBase):
 
             for model in self._model_list:
                 base._module(model)._global_step += 1
-        return batched_V_drat_logits, batched_v_pre_logits
+        return batched_V_drat_logits, batched_v_pre_logits, prediction
 
     def train_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
             graph_feat, label, G):
@@ -373,7 +377,7 @@ class Base(base.FactorGraphTrainerBase):
                 del s
 
         optimizer.step()
-        return batched_V_drat_logits, batched_v_pre_logits
+        return batched_V_drat_logits, batched_v_pre_logits, prediction
 
     # def forward(self, G, data):
     #     for data_item in self.transform_data(data):

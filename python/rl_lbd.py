@@ -287,46 +287,50 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     gs: list of returns
     advs: list of advantages
     """
-    agg_loss = None
-    if graphsage is not None:
-        agg_loss = graphsage.loss(nodes, labels)
+    for data in model.transform_data(cnfs):
+        agg_loss = None
+        if graphsage is not None:
+            agg_loss = graphsage.loss(nodes, labels)
+            prediction, _ = model.train(G, data)
+            scores = np.array(gs, dtype = "float32") + np.array(advs, dtype = "float32")
+            rank = np.argsort(scores)
+            variables = actions[np.argwhere(rank[rank < 5])]
 
-    pre_policy_logitss, pre_unreduced_value_logitss = model(G, cnfs)
-    policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
-    actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
-    advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
+    # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
+    # actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
+    # advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
+    #
+    # policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
+    # mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
+    # rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
+    #                     enumerate(zip(policy_distribs, mu_distribs))])
+    #
+    # psis = advs * rhos
+    # print(f'advs:{advs}, rhos: {rhos}')
+    # log_probs = torch.empty(batch_size).to(device)
+    # for i in range(batch_size):
+    #     log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
+    #
+    # p_loss = -(log_probs * psis).mean()
+    # # v^
+    # vals = torch.sigmoid(
+    #     torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
+    # # print(f'vals:{vals}, gs: {gs}')
+    #
+    # v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
+    # loss = p_loss + 0.1 * v_loss
+    # if agg_loss:
+    #     loss += agg_loss
+    #
+    # loss.backward()
+    # print('total_loss', loss.detach().cpu().numpy())
+    #
+    # nn.utils.clip_grad_value_(model.parameters(), 100)
+    # nn.utils.clip_grad_norm_(model.parameters(), 10)
+    #
+    # optim.step()
 
-    policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
-    mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
-    rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
-                        enumerate(zip(policy_distribs, mu_distribs))])
-
-    psis = advs * rhos
-    print(f'advs:{advs}, rhos: {rhos}')
-    log_probs = torch.empty(batch_size).to(device)
-    for i in range(batch_size):
-        log_probs[i] = policy_distribs[i].log_prob(actions[i] - 1)
-
-    p_loss = -(log_probs * psis).mean()
-    # v^
-    vals = torch.sigmoid(
-        torch.stack([x.mean() for x in batcher.unbatch(pre_unreduced_value_logitss, mode = "variable")]).to(device))
-    # print(f'vals:{vals}, gs: {gs}')
-
-    v_loss = F.mse_loss(vals, torch.as_tensor(np.array(gs, dtype = "float32")).to(device))
-    loss = p_loss + 0.1 * v_loss
-    if agg_loss:
-        loss += agg_loss
-
-    loss.backward()
-    print('total_loss', loss.detach().cpu().numpy())
-
-    nn.utils.clip_grad_value_(model.parameters(), 100)
-    nn.utils.clip_grad_norm_(model.parameters(), 10)
-
-    optim.step()
-
-    return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
+    # return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
 def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
@@ -335,7 +339,7 @@ def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, 
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
-        pre_policy_logitss, pre_unreduced_value_logitss = model(G, data)
+        pre_policy_logitss, pre_unreduced_value_logitss = model.train(G, data)
         policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
         actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
