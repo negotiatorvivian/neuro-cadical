@@ -115,7 +115,7 @@ def cnf_to_data(cnfs):
 def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnf, last_val = 0, gam = 1.0, lam = 1.0):
     gs = discount_cumsum(rewards, int(gam))
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
-    :-1]  # future advantage
+                                                                                       :-1]  # future advantage
     adv = discount_cumsum(deltas, int(gam * lam))
     data = cnf_to_data(cnf)
     return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data  # note, gs[0] is total value
@@ -155,7 +155,7 @@ class NeuroAgent(Agent):
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
     def __init__(self, buf, weight_manager, logdir, model_cfg = defaultGNN1Cfg, model_state_dict = None,
-            from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
+                 from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
         self.logger = TrainLogger(logdir = logdir)
@@ -275,7 +275,7 @@ class ReplayBuffer:
 
 
 def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
-        device = torch.device("cpu")):
+               device = torch.device("cpu")):
     """
     Calculate loss and perform a single gradient update. Returns a dictionary of statistics.
 
@@ -299,7 +299,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
     mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
     rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
-                           enumerate(zip(policy_distribs, mu_distribs))])
+                        enumerate(zip(policy_distribs, mu_distribs))])
 
     psis = advs * rhos
     print(f'advs:{advs}, rhos: {rhos}')
@@ -330,7 +330,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 
 
 def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
-        device = torch.device("cpu")):
+                device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
         agg_loss = None
         if graphsage is not None:
@@ -343,7 +343,7 @@ def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, 
         policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
         mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
         rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
-                               enumerate(zip(policy_distribs, mu_distribs))])
+                            enumerate(zip(policy_distribs, mu_distribs))])
 
         psis = advs * rhos
         print(f'advs:{advs}, rhos: {rhos}')
@@ -444,7 +444,7 @@ class WeightManager:
             f.write(json.dumps(cfg_dict, indent = 2))
 
     def save_ckpt(self, model_state_dict, optim_state_dict, save_counter, GLOBAL_STEP_COUNT, episode_count,
-            name = 'best'):
+                  name = 'best'):
         self.model_state_dict = model_state_dict
         self.optim_state_dict = optim_state_dict
         self.save_counter = save_counter
@@ -461,7 +461,7 @@ class WeightManager:
 # let's try single-GPU training for now
 class Learner:
     def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, log_dir, ckpt_dir,
-            ckpt_freq, lr, sp_config, restore = True, model_cfg = defaultGNN1Cfg):
+                 ckpt_freq, lr, sp_config, restore = True, model_cfg = defaultGNN1Cfg):
         self.encode_dim = encode_dim
         self.feature_dim = feature_dim
         self.num_samples = num_samples
@@ -476,18 +476,16 @@ class Learner:
         self.logger = TrainLogger(logdir = self.logdir)
         self.GLOBAL_STEP_COUNT = 0
         self.save_counter = 0
+        self.batcher = Batcher()
         if torch.cuda.is_available():
             print("[LEARNER] USING GPU")
             self.device = torch.device("cuda")
         else:
             self.device = torch.device("cpu")
         # self.model = GNN1(model_cfg, {'config': sp_config, 'cpu': True, 'logger': self.logger})
-        self.model = Base(sp_config, model_cfg, sp_config['train_batch_limit'], self.device, self.batcher, {
-            'cpu': True, 'logger': self.logger
-        })
-        self.rl_model = GNN1(model_cfg)
+        self.model = Base(model_cfg, sp_config, self.device, self.batcher, cpu = True, logger = self.logger)
+        self.rl_model = GNN1(**model_cfg)
         self.optim = torch.optim.Adam(self.model.parameters, lr = self.lr)
-        self.batcher = Batcher()
         if restore:
             ckpt = ray.get(self.weight_manager.load_latest_ckpt.remote())
             if ckpt is not None:
@@ -623,7 +621,7 @@ def _parse_main():
     parser.add_argument("--lr", dest = "lr", type = float, action = "store", default = 1e-4)
     parser.add_argument("--root-dir", dest = "root_dir", action = "store")
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
-    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 8)
+    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 4)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
     parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 25, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)

@@ -8,7 +8,8 @@ import os
 
 from sp import trainer
 from sp.factorgraph import dataset, base
-from sp.nn import solver, util
+from sp.nn import solver
+from sp.nn.util import SatCNFEvaluator, SatLossEvaluator
 from train1 import *
 from gen_data import lemma_occ
 
@@ -222,20 +223,20 @@ class GNN1_drat(nn.Module):  # deploy the drat head only
 
 
 class Base(base.FactorGraphTrainerBase):
-    def __init__(self, model_cfg, config, limit, device, batcher, batch_replication = 1, average_pool = False,
+    def __init__(self, model_cfg, config, device, batcher, batch_replication = 1, average_pool = False,
             normalize = True, **kwargs):
         super(Base, self).__init__(config = config, has_meta_data = False, error_dim = config['error_dim'], loss = None,
                                    evaluator = nn.L1Loss(), use_cuda = not kwargs['cpu'], logger = kwargs['logger'])
-        self.gnn = rl_GNN1(*model_cfg, average_pool, normalize)
+        self.gnn = rl_GNN1(**model_cfg)
         self.config = config
         self._device = device
         self._eps = 1e-8 * torch.ones(1, device = self._device)
-        self._loss_evaluator = util.SatLossEvaluator(alpha = self.config['exploration'], device = self._device)
-        self._cnf_evaluator = util.SatCNFEvaluator(device = self._device)
+        self._loss_evaluator = SatLossEvaluator(alpha = self.config['exploration'], device = self._device)
+        self._cnf_evaluator = SatCNFEvaluator(device = self._device)
         self._counter = 0
         self._max_coeff = 10.0
-        self.batch_divider = dataset.DynamicBatchDivider(limit // batch_replication, self.config['hidden_dim'])
-        self._model_list += self.gnn
+        self.batch_divider = dataset.DynamicBatchDivider(self.config['train_batch_limit'] // batch_replication, self.config['hidden_dim'])
+        self._model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
 
@@ -461,8 +462,7 @@ class Base(base.FactorGraphTrainerBase):
 class rl_GNN1(nn.Module):
     def __init__(self, clause_dim, lit_dim, n_hops, n_layers_C_update, n_layers_L_update, n_layers_score, activation,
             average_pool = False, normalize = True, **kwargs):
-        super(rl_GNN1, self).__init__()
-
+        super(rl_GNN1, self).__init__(**kwargs)
         self.L_layer_norm = nn.LayerNorm(lit_dim)
         self.L_init = nn.Parameter(torch.nn.init.xavier_normal_(torch.empty([1, lit_dim])), requires_grad = True)
 

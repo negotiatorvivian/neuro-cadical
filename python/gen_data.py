@@ -156,7 +156,7 @@ def coo(fmla):
     mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_features)).squeeze().float(),
                                    [fmla.nv, len(fmla.clauses)]).unsqueeze(1).to_dense()
     if fmla.is_sat:
-        core_var_mask = np.sign(fmla.answers, dtype = np.int32)
+        core_var_mask = np.sign(fmla.answers)
         core_clause_mask = np.ones(len(fmla.clauses), dtype = np.int32)
     else:
         core_var_mask = np.ones(fmla.nv, dtype = np.int32)
