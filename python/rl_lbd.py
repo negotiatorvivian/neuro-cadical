@@ -115,7 +115,7 @@ def cnf_to_data(cnfs):
 def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnf, last_val = 0, gam = 1.0, lam = 1.0):
     gs = discount_cumsum(rewards, int(gam))
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
-                                                                                       :-1]  # future advantage
+    :-1]  # future advantage
     adv = discount_cumsum(deltas, int(gam * lam))
     data = cnf_to_data(cnf)
     return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data  # note, gs[0] is total value
@@ -155,7 +155,7 @@ class NeuroAgent(Agent):
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
     def __init__(self, buf, weight_manager, logdir, model_cfg = defaultGNN1Cfg, model_state_dict = None,
-                 from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
+            from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
         self.logger = TrainLogger(logdir = logdir)
@@ -275,7 +275,7 @@ class ReplayBuffer:
 
 
 def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
-               device = torch.device("cpu")):
+        device = torch.device("cpu")):
     """
     Calculate loss and perform a single gradient update. Returns a dictionary of statistics.
 
@@ -299,7 +299,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
     mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
     rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
-                        enumerate(zip(policy_distribs, mu_distribs))])
+                           enumerate(zip(policy_distribs, mu_distribs))])
 
     psis = advs * rhos
     print(f'advs:{advs}, rhos: {rhos}')
@@ -330,7 +330,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 
 
 def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
-                device = torch.device("cpu")):
+        device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
         agg_loss = None
         if graphsage is not None:
@@ -343,7 +343,7 @@ def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, 
         policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
         mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
         rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
-                            enumerate(zip(policy_distribs, mu_distribs))])
+                               enumerate(zip(policy_distribs, mu_distribs))])
 
         psis = advs * rhos
         print(f'advs:{advs}, rhos: {rhos}')
@@ -413,7 +413,7 @@ class WeightManager:
         return ckpt
 
     def load_ckpt(self, ckpt):
-        self.model_state_dict = ckpt["model_state_dict"]
+        self.model_state_dict = json.loads(ckpt["model_state_dict"])
         self.optim_state_dict = ckpt["optim_state_dict"]
         self.save_counter = ckpt["save_counter"]
         self.GLOBAL_STEP_COUNT = ckpt["GLOBAL_STEP_COUNT"]
@@ -426,7 +426,7 @@ class WeightManager:
             status = True
             model_state_dict = dict()
             for k, v in self.model_state_dict.items():
-                model_state_dict[k] = v.cpu()
+                model_state_dict[k] = v
             new_rank = self.save_counter
         return status, model_state_dict, new_rank
 
@@ -444,7 +444,7 @@ class WeightManager:
             f.write(json.dumps(cfg_dict, indent = 2))
 
     def save_ckpt(self, model_state_dict, optim_state_dict, save_counter, GLOBAL_STEP_COUNT, episode_count,
-                  name = 'best'):
+            name = 'best'):
         self.model_state_dict = model_state_dict
         self.optim_state_dict = optim_state_dict
         self.save_counter = save_counter
@@ -461,7 +461,7 @@ class WeightManager:
 # let's try single-GPU training for now
 class Learner:
     def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, log_dir, ckpt_dir,
-                 ckpt_freq, lr, sp_config, restore = True, model_cfg = defaultGNN1Cfg):
+            ckpt_freq, lr, sp_config, restore = True, model_cfg = defaultGNN1Cfg):
         self.encode_dim = encode_dim
         self.feature_dim = feature_dim
         self.num_samples = num_samples
@@ -550,8 +550,9 @@ class Learner:
         name = 'best' if best else 'last'
         models = [model.state_dict() for model in self.model.model_list]
         model_names = [model._name for model in self.model.model_list]
-        self.weight_manager.save_ckpt.remote(dict(zip(model_names, models)),
-        self.optim.state_dict(), self.save_counter + 1, self.GLOBAL_STEP_COUNT, episode_count = episode_count, name = name)
+        self.weight_manager.save_ckpt.remote(json.dumps(dict(zip(model_names, models))), self.optim.state_dict(),
+                                             self.save_counter + 1, self.GLOBAL_STEP_COUNT,
+                                             episode_count = episode_count, name = name)
         self.save_counter += 1
 
     def train(self, step_limit = None, time_limit = None, synchronous = False):

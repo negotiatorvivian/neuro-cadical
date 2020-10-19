@@ -294,9 +294,9 @@ class Base(base.FactorGraphTrainerBase):
 
         yield graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, graph_feat_batch, label_batch, misc_data
 
-    def load_state_dict(self, ckpt):
+    def load_state_dict(self, ckpt, strict = False):
         for model in self.model_list:
-            _module(model).load_state_dict(ckpt['model_state_dict'][model.name])
+            _module(model).load_state_dict(ckpt[model.name], strict)
 
     def train(self, G, *train_data):
         total_example_num = 0
