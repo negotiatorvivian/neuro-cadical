@@ -243,7 +243,6 @@ class Base(base.FactorGraphTrainerBase):
         self.model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
-        self.name = 'aggregator'
 
     def transform_data(self, data):
         # graph_map, batch_variable_map, batch_function_map,edge_feature, graph_feat, label
@@ -496,7 +495,7 @@ class rl_GNN1(nn.Module):
         self.average_pool = average_pool
         self.normalize = normalize
         self._global_step = nn.Parameter(torch.tensor([0], dtype = torch.float), requires_grad = False)
-        self.name = 'rl_learner'
+        self._name = 'rl_learner'
         if not self.normalize:
             self.C_layer_norm = nn.LayerNorm(clause_dim)
 
@@ -557,7 +556,7 @@ class rl_GNN1(nn.Module):
         V_core_logitss = batcher.unbatch(batched_V_core_logits, mode = "variable")
         C_core_logitss = batcher.unbatch(batched_C_core_logits, mode = "clause")
 
-        drat_loss = compute_softmax_kldiv_loss_from_logits(V_drat_logitss, var_lemma_countss, tau = 1.0)
+        drat_loss = compute_softmax_kldiv_loss_from_logits(V_drat_logitss, var_lemma_counts, tau = 1.0)
         # core_loss = compute_mask_loss(torch.cat(V_core_logitss).unsqueeze(1), [prediction[0].detach()])
         core_loss = compute_mask_loss(V_core_logitss, core_var_masks)
         core_clause_loss = compute_mask_loss(C_core_logitss, core_clause_masks)
