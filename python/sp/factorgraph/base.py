@@ -50,7 +50,7 @@ class FactorGraphTrainerBase:
         # torch.set_num_threads(self._num_cores)
 
         # Build the network
-        self._model_list = [self._set_device(model) for model in self._build_graph(self._config)]
+        self.model_list = [self._set_device(model) for model in self._build_graph(self._config)]
 
     def _build_graph(self, config):
         "Builds the forward computational graph."
@@ -74,19 +74,19 @@ class FactorGraphTrainerBase:
     def _load(self, import_path_base):
         "Loads the model(s) from file."
         
-        for model in self._model_list:
+        for model in self.model_list:
             _module(model).load(import_path_base)
 
     def _save(self, export_path_base):
         "Saves the model(s) to file."
 
-        for model in self._model_list:
+        for model in self.model_list:
             _module(model).save(export_path_base)
 
     def _reset_global_step(self):
         "Resets the global step counter."
         
-        for model in self._model_list:
+        for model in self.model_list:
             _module(model)._global_step.data = torch.tensor([0], dtype=torch.float, device=self._device)
 
     def _set_device(self, model):
@@ -107,13 +107,13 @@ class FactorGraphTrainerBase:
     def get_parameter_list(self):
         "Returns list of dictionaries with models' parameters."
         return [{'params': filter(lambda p: p.requires_grad, model.parameters())}
-                for model in self._model_list]
+                for model in self.model_list]
 
     def _train_epoch(self, train_loader, optimizer):
         train_batch_num = math.ceil(len(train_loader.dataset) / self._config['batch_size'])
         # print('len(train_loader.dataset)', len(train_loader.dataset), train_batch_num)
 
-        total_loss = np.zeros(len(self._model_list), dtype=np.float32)
+        total_loss = np.zeros(len(self.model_list), dtype=np.float32)
         total_example_num = 0
 
         for (j, data) in enumerate(train_loader, 1):
@@ -141,7 +141,7 @@ class FactorGraphTrainerBase:
                 del graph_feat
                 del label
 
-            for model in self._model_list:
+            for model in self.model_list:
                 _module(model)._global_step += 1
 
         return total_loss / total_example_num  # max(1, len(train_loader))
@@ -152,7 +152,7 @@ class FactorGraphTrainerBase:
         optimizer.zero_grad()
         lambda_value = torch.tensor([self._config['lambda']], dtype=torch.float32, device=self._device)
 
-        for (i, model) in enumerate(self._model_list):
+        for (i, model) in enumerate(self.model_list):
 
             state = _module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, 
                 edge_feature, graph_feat, self._config['randomized'])
@@ -188,7 +188,7 @@ class FactorGraphTrainerBase:
         with torch.no_grad():
 
             error = np.zeros(
-                (self._error_dim, len(self._model_list)), dtype=np.float32)
+                (self._error_dim, len(self.model_list)), dtype=np.float32)
             total_example_num = 0
 
             for (j, data) in enumerate(validation_loader, 1):
@@ -226,7 +226,7 @@ class FactorGraphTrainerBase:
         this_batch_size = batch_variable_map.max() + 1 
         edge_num = graph_map.size(1)
 
-        for (i, model) in enumerate(self._model_list):
+        for (i, model) in enumerate(self.model_list):
 
             state = _module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, 
                 edge_feature, graph_feat, randomized=True, batch_replication=batch_replication)
@@ -282,7 +282,7 @@ class FactorGraphTrainerBase:
 
         edge_num = graph_map.size(1)
 
-        for (i, model) in enumerate(self._model_list):
+        for (i, model) in enumerate(self.model_list):
 
             state = _module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, 
                 edge_feature, graph_feat, randomized=False, batch_replication=batch_replication)
@@ -325,7 +325,7 @@ class FactorGraphTrainerBase:
             hidden_dim=self._config['hidden_dim'], batch_size=self._config['batch_size'], shuffle=False,
             num_workers=self._num_cores, max_cache_size=self._config['max_cache_size'])
 
-        model_num = len(self._model_list)
+        model_num = len(self.model_list)
 
         errors = np.zeros(
             (self._error_dim, model_num, self._config['epoch_num'],
@@ -365,11 +365,11 @@ class FactorGraphTrainerBase:
 
                 # Checkpoint the best models so far
                 if last_export_path_base is not None:
-                    for (i, model) in enumerate(self._model_list):
+                    for (i, model) in enumerate(self.model_list):
                         _module(model).save(last_export_path_base)
 
                 if best_export_path_base is not None:
-                    for (i, model) in enumerate(self._model_list):
+                    for (i, model) in enumerate(self.model_list):
                         if errors[metric_index, i, epoch, rep] < best_errors[i]:
                             best_errors[i] = errors[metric_index, i, epoch, rep]
                             _module(model).save(best_export_path_base)
@@ -379,7 +379,7 @@ class FactorGraphTrainerBase:
 
                 if self._config['verbose']:
                     message = ''
-                    for (i, model) in enumerate(self._model_list):
+                    for (i, model) in enumerate(self.model_list):
                         name = _module(model)._name
                         message += 'Step {:d}: {:s} error={:s}, {:s} loss={:5.5f} |'.format(
                             _module(model)._global_step.int()[0], name,
@@ -401,7 +401,7 @@ class FactorGraphTrainerBase:
             # Save the model
             self._save(best_export_path_base)
 
-        return self._model_list, errors, losses
+        return self.model_list, errors, losses
 
     def test(self, test_list, import_path_base=None, batch_replication=1):
         "Tests the PDP model and generates test stats."
@@ -437,7 +437,7 @@ class FactorGraphTrainerBase:
 
             if self._config['verbose']:
                 message = ''
-                for (i, model) in enumerate(self._model_list):
+                for (i, model) in enumerate(self.model_list):
                     message += '{:s}, dataset:{:s} error={:s}|'.format(
                         _module(model)._name, file, np.array_str(error[:, i].flatten()))
 

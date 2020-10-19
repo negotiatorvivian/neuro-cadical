@@ -484,7 +484,7 @@ class Learner:
             self.device = torch.device("cpu")
         # self.model = GNN1(model_cfg, {'config': sp_config, 'cpu': True, 'logger': self.logger})
         self.model = Base(model_cfg, sp_config, self.device, self.batcher, cpu = True, logger = self.logger)
-        self.rl_model = GNN1(**model_cfg)
+        # self.rl_model = GNN1(**model_cfg)
         self.optim = torch.optim.Adam(self.model.parameters, lr = self.lr)
         if restore:
             ckpt = ray.get(self.weight_manager.load_latest_ckpt.remote())
@@ -536,7 +536,7 @@ class Learner:
         print(f"SYNCED WEIGHTS TO WORKER {w}")
 
     def get_weights(self):
-        return self.model.state_dict()
+        return self.model.model_list[-1].state_dict()
 
     def set_weights(self, ckpt):
         self.model.load_state_dict(ckpt["model_state_dict"], strict = False)
@@ -548,8 +548,10 @@ class Learner:
     def save_ckpt(self, best = False):
         episode_count = ray.get(self.buf.get_episode_count.remote())
         name = 'best' if best else 'last'
-        self.weight_manager.save_ckpt.remote(self.model.state_dict(), self.optim.state_dict(), self.save_counter + 1,
-                                             self.GLOBAL_STEP_COUNT, episode_count = episode_count, name = name)
+        models = [model.state_dict() for model in self.model.model_list]
+        model_names = [model.name for model in self.model.model_list]
+        self.weight_manager.save_ckpt.remote(dict(zip(model_names, models)),
+        self.optim.state_dict(), self.save_counter + 1, self.GLOBAL_STEP_COUNT, episode_count = episode_count, name = name)
         self.save_counter += 1
 
     def train(self, step_limit = None, time_limit = None, synchronous = False):

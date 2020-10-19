@@ -14,6 +14,10 @@ from train1 import *
 from gen_data import lemma_occ
 
 
+def _module(model):
+    return model.module if isinstance(model, nn.DataParallel) else model
+
+
 def decode_activation(activation):
     if activation == "relu":
         return nn.ReLU
@@ -236,9 +240,10 @@ class Base(base.FactorGraphTrainerBase):
         self._counter = 0
         self._max_coeff = 10.0
         self.batch_divider = dataset.DynamicBatchDivider(self.config['train_batch_limit'] // batch_replication, self.config['hidden_dim'])
-        self._model_list.append(self.gnn)
+        self.model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
+        self.name = 'aggregator'
 
     def transform_data(self, data):
         # graph_map, batch_variable_map, batch_function_map,edge_feature, graph_feat, label
@@ -290,9 +295,13 @@ class Base(base.FactorGraphTrainerBase):
 
         yield graph_map_batch, batch_variable_map_batch, batch_function_map_batch, edge_feature_batch, graph_feat_batch, label_batch, misc_data
 
+    def load_state_dict(self, ckpt):
+        for model in self.model_list:
+            _module(model).load_state_dict(ckpt['model_state_dict'][model.name])
+
     def train(self, G, *train_data):
         total_example_num = 0
-        total_loss = np.zeros(len(self._model_list), dtype = np.float32)
+        total_loss = np.zeros(len(self.model_list), dtype = np.float32)
         print(self.get_parameter_list())
         optimizer = optim.Adam(self.get_parameter_list(), lr = self.config['learning_rate'],
                                weight_decay = self.config['weight_decay'])
@@ -313,7 +322,7 @@ class Base(base.FactorGraphTrainerBase):
                 del graph_feat
                 del label
 
-            for model in self._model_list:
+            for model in self.model_list:
                 base._module(model)._global_step += 1
         return batched_V_drat_logits, batched_v_pre_logits
 
@@ -324,7 +333,7 @@ class Base(base.FactorGraphTrainerBase):
         lambda_value = torch.tensor([self.config['lambda']], dtype = torch.float32, device = self._device)
         prediction = None
 
-        for (i, model) in enumerate(self._model_list[:-1]):
+        for (i, model) in enumerate(self.model_list[:-1]):
 
             state = base._module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, edge_feature,
                                                        graph_feat, self.config['randomized'])
@@ -359,11 +368,11 @@ class Base(base.FactorGraphTrainerBase):
                     (self.config['train_outer_recurrence_num'] - t - 1).float())
                 batched_V_drat_logits, batched_v_pre_logits, batched_V_core_logits, batched_C_core_logits = (lambda x: (
                     x[0].view([x[0].size(0)]), x[1].view([x[1].size(0)]),
-                    x[2].view([x[2].size(0)], x[3].view([x[1].size(0)]))))(self._model_list[-1](G))
+                    x[2].view([x[2].size(0)], x[3].view([x[1].size(0)]))))(self.model_list[-1](G))
 
-                loss += self._model_list[-1]._compute_loss(self.batcher, batched_V_drat_logits, batched_V_core_logits,
-                                                           batched_C_core_logits, var_lemma_counts, core_var_masks,
-                                                           core_clause_masks)
+                loss += self.model_list[-1]._compute_loss(self.batcher, batched_V_drat_logits, batched_V_core_logits,
+                                                          batched_C_core_logits, var_lemma_counts, core_var_masks,
+                                                          core_clause_masks)
 
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), self.config['clip_norm'])
@@ -487,6 +496,7 @@ class rl_GNN1(nn.Module):
         self.average_pool = average_pool
         self.normalize = normalize
         self._global_step = nn.Parameter(torch.tensor([0], dtype = torch.float), requires_grad = False)
+        self.name = 'rl_learner'
         if not self.normalize:
             self.C_layer_norm = nn.LayerNorm(clause_dim)
 
