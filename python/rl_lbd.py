@@ -332,6 +332,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 
 def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
         device = torch.device("cpu")):
+    print(cnfs)
     for data in model.transform_data(cnfs):
         agg_loss = None
         if graphsage is not None:
