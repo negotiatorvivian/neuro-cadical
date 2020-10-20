@@ -550,7 +550,8 @@ class Learner:
         name = 'best' if best else 'last'
         models = [model.state_dict() for model in self.model.model_list]
         model_names = [model._name for model in self.model.model_list]
-        self.weight_manager.save_ckpt.remote(json.dumps(dict(zip(model_names, models))), self.optim.state_dict(),
+        model_state = dict(zip(model_names, models))
+        self.weight_manager.save_ckpt.remote(json.dumps(model_state), self.optim.state_dict(),
                                              self.save_counter + 1, self.GLOBAL_STEP_COUNT,
                                              episode_count = episode_count, name = name)
         self.save_counter += 1
