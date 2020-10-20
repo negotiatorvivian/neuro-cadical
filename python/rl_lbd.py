@@ -389,7 +389,8 @@ class WeightManager:
     def __init__(self, ckpt_dir):
         self.ckpt_dir = ckpt_dir
         self.save_counter = 0
-        self.model_state_dict = {}
+        self.model_state_dict1 = {}
+        self.model_state_dict2 = {}
         self.optim_state_dict = {}
         self.GLOBAL_STEP_COUNT = 0
 
@@ -413,22 +414,28 @@ class WeightManager:
         return ckpt
 
     def load_ckpt(self, ckpt):
-        self.model_state_dict = json.loads(ckpt["model_state_dict"])
+        self.model_state_dict1 = json.loads(ckpt["model_state_dict1"])
+        self.model_state_dict2 = json.loads(ckpt["model_state_dict2"])
         self.optim_state_dict = ckpt["optim_state_dict"]
         self.save_counter = ckpt["save_counter"]
         self.GLOBAL_STEP_COUNT = ckpt["GLOBAL_STEP_COUNT"]
 
     def sync_weights(self, rank):
         status = False
-        model_state_dict = None
+        model_state_dict1 = None
+        model_state_dict2 = None
+
         new_rank = rank
         if rank < self.save_counter:
             status = True
-            model_state_dict = dict()
-            for k, v in self.model_state_dict.items():
-                model_state_dict[k] = v
+            model_state_dict1 = dict()
+            model_state_dict2 = dict()
+            for k, v in self.model_state_dict1.items():
+                model_state_dict1[k] = v
+            for k, v in self.model_state_dict2.items():
+                model_state_dict2[k] = v
             new_rank = self.save_counter
-        return status, model_state_dict, new_rank
+        return status, model_state_dict1, model_state_dict2, new_rank
 
     def update_index(self, ckpt_path):
         ckpt_dir = os.path.dirname(ckpt_path)
@@ -443,16 +450,18 @@ class WeightManager:
             cfg_dict = {"latest": ckpt_path}
             f.write(json.dumps(cfg_dict, indent = 2))
 
-    def save_ckpt(self, model_state_dict, optim_state_dict, save_counter, GLOBAL_STEP_COUNT, episode_count,
-            name = 'best'):
-        self.model_state_dict = model_state_dict
+    def save_ckpt(self, model_state_dict1, model_state_dict2, optim_state_dict, save_counter, GLOBAL_STEP_COUNT,
+            episode_count, name = 'best'):
+        self.model_state_dict1 = model_state_dict1
+        self.model_state_dict2 = model_state_dict2
         self.optim_state_dict = optim_state_dict
         self.save_counter = save_counter
         self.GLOBAL_STEP_COUNT = GLOBAL_STEP_COUNT
         ckpt_path = os.path.join(self.ckpt_dir, f"ckpt_{name}.pth")
         torch.save({
-            "model_state_dict": model_state_dict, "optim_state_dict": optim_state_dict, "save_counter": save_counter,
-            "GLOBAL_STEP_COUNT": GLOBAL_STEP_COUNT, "episode_count": episode_count
+            "model_state_dict1": model_state_dict1, "model_state_dict2": model_state_dict2,
+            "optim_state_dict": optim_state_dict, "save_counter": save_counter, "GLOBAL_STEP_COUNT": GLOBAL_STEP_COUNT,
+            "episode_count": episode_count
         }, ckpt_path)
         self.update_index(
             ckpt_path)  # print(f"SAVED CHECKPOINT TO ckpt_{name}.pth")  # print(f"GLOBAL_STEP_COUNT: {GLOBAL_STEP_COUNT}\nEPISODE_COUNT: {episode_count}")
@@ -539,7 +548,7 @@ class Learner:
         return self.model.model_list[-1].state_dict()
 
     def set_weights(self, ckpt):
-        self.model.load_state_dict(ckpt["model_state_dict"], strict = False)
+        self.model.load_state_dict([ckpt["model_state_dict1"], ckpt["model_state_dict2"]], strict = False)
         self.optim.load_state_dict(ckpt["optim_state_dict"])
         self.GLOBAL_STEP_COUNT = ckpt["GLOBAL_STEP_COUNT"]
         self.save_counter = ckpt["save_counter"]
@@ -548,11 +557,11 @@ class Learner:
     def save_ckpt(self, best = False):
         episode_count = ray.get(self.buf.get_episode_count.remote())
         name = 'best' if best else 'last'
-        models = [model.state_dict() for model in self.model.model_list]
-        model_names = [model._name for model in self.model.model_list]
-        model_state = dict(zip(model_names, models))
-        self.weight_manager.save_ckpt.remote(json.dumps(model_state), self.optim.state_dict(),
-                                             self.save_counter + 1, self.GLOBAL_STEP_COUNT,
+        # models = [model.state_dict() for model in self.model.model_list]
+        # model_names = [model._name for model in self.model.model_list]
+        # model_state = dict(zip(model_names, models))
+        self.weight_manager.save_ckpt.remote(self.model.model_list[0], self.model.model_list[1],
+                                             self.optim.state_dict(), self.save_counter + 1, self.GLOBAL_STEP_COUNT,
                                              episode_count = episode_count, name = name)
         self.save_counter += 1
 
