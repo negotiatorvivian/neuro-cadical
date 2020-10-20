@@ -208,10 +208,11 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
         self.ckpt_rank = new_rank
 
     def try_update_weights(self):
-        status, new_state_dict, new_rank = ray.get(self.weight_manager.sync_weights.remote(self.ckpt_rank))
+        status, new_state_dict1, new_state_dict2, new_rank = ray.get(self.weight_manager.sync_weights.remote(
+            self.ckpt_rank))
         if status:
             print(f"SYNCING WEIGHTS: {self.ckpt_rank} -> {new_rank}")
-            self.set_weights(new_state_dict, new_rank)
+            self.set_weights([new_state_dict1, new_state_dict2], new_rank)
 
     def __del__(self):
         try:
