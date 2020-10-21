@@ -59,7 +59,6 @@ def compute_mask_loss(V_logitss, masks):
 def compute_softmax_kldiv_loss_from_logits(V_logitss, target_logits, tau = 4.0):
     softmax = nn.Softmax(dim = 1)
     target_probs = []
-    print(f'target_logits: {target_logits}')
     for logits in target_logits:
         logits = (logits - logits.mean())
         logits = logits / (logits.std() + 1e-10)
