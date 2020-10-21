@@ -344,7 +344,7 @@ def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, 
         actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device)
 
-        policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss]
+        policy_distribs = [Categorical(logits = x.squeeze().to(device)) for x in policy_logitss.clone()]
         mu_distribs = [Categorical(logits = x.squeeze().to(device)) for x in mu_logitss]
         rhos = torch.stack([torch.exp(x.log_prob(actions[i] - 1) - y.log_prob(actions[i] - 1)) for i, (x, y) in
                                enumerate(zip(policy_distribs, mu_distribs))])
