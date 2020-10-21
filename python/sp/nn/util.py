@@ -130,7 +130,7 @@ class SatLossEvaluator(nn.Module):
         all_ones = torch.ones(edge_num, device=device)
         edge_num_range = torch.arange(edge_num, dtype=torch.int64, device=device)
 
-        variable_sparse_ind = torch.stack([edge_num_range, graph_map[0, :].long()])
+        variable_sparse_ind = torch.stack([edge_num_range, graph_map[0, :].long().to(device)])
         function_sparse_ind = torch.stack([graph_map[1, :].long(), edge_num_range])
 
         if device.type == 'cuda':

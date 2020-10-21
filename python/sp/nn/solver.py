@@ -410,7 +410,7 @@ class PropagatorDecimatorSolverBase(nn.Module):
                 sat_problem._active_variables[:, 0] == 1, 0]
         else:
             variable_solution = None
-        print('_update_solution', variable_solution, prediction[0], prediction[1])
+        # print('_update_solution', variable_solution, prediction[0], prediction[1])
 
         return variable_solution, prediction[1]
 

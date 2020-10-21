@@ -87,6 +87,7 @@ def sample_trajectory(agent, env, cnf, logger):
         actions.append(action)
         rewards.append(reward)
         value_estimates.append(value_estimate)
+        # cnfs.append(cnf)
     # when jump out  of the loop, CL_idxs.C_idxs is []
     logger.write_log(f"actions: {actions}, rewards: {rewards}, value_estimate: {value_estimates}")
     env.reset()
@@ -112,12 +113,12 @@ def cnf_to_data(cnfs):
     return results
 
 
-def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnf, last_val = 0, gam = 1.0, lam = 1.0):
+def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, last_val = 0, gam = 1.0, lam = 1.0):
     gs = discount_cumsum(rewards, int(gam))
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
     :-1]  # future advantage
     adv = discount_cumsum(deltas, int(gam * lam))
-    data = cnf_to_data(cnf)
+    data = cnf_to_data(cnfs)
     return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data  # note, gs[0] is total value
 
 
@@ -243,8 +244,9 @@ class ReplayBuffer:
         Gs, mu_logitss, actions, gs, advs, total_return, cnfs = tau
         # print(gs)
         self.writer.add_scalar("total return", total_return, self.episode_count)
+        print(f'Gs: {len(Gs)}, actions: {len(actions)}, cnfs: {len(cnfs)}')
         for G, mu_logits, action, g, adv, cnf in zip(Gs, mu_logitss, actions, gs, advs, cnfs):
-            self.queue.put((G, mu_logits, action, g, adv, cnfs))
+            self.queue.put((G, mu_logits, action, g, adv, cnf))
 
         print(f"TOTAL RETURN: {gs[0]}")
         self.episode_count += 1
@@ -332,7 +334,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
 
 def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
         device = torch.device("cpu")):
-    print(cnfs)
+
     for data in model.transform_data(cnfs):
         agg_loss = None
         if graphsage is not None:
