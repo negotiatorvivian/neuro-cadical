@@ -64,7 +64,6 @@ def compute_softmax_kldiv_loss_from_logits(V_logitss, target_logits, tau = 4.0):
         logits = (logits - logits.mean())
         logits = logits / (logits.std() + 1e-10)
         logits = tau * logits
-        print(logits.view((1,) + logits.size()))
         target_probs.append(softmax((logits.view((1,) + logits.size()))).view(logits.size()))
 
     # target_probs = [softmax(tau * (logits.view((1,) + logits.size()))).view(logits.size()) for logits in target_logits]

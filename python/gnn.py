@@ -557,6 +557,7 @@ class rl_GNN1(nn.Module):
         V_core_logitss = batcher.unbatch(batched_V_core_logits, mode = "variable")
         var_lemma_counts = batcher.unbatch(batched_var_lemma_counts, mode = "variable")
         C_core_logitss = batcher.unbatch(batched_C_core_logits, mode = "clause")
+        print(f'C_core_logitss, {C_core_logitss}')
 
         drat_loss = compute_softmax_kldiv_loss_from_logits(V_drat_logitss, var_lemma_counts, tau = 1.0)
         # core_loss = compute_mask_loss(torch.cat(V_core_logitss).unsqueeze(1), [prediction[0].detach()])
