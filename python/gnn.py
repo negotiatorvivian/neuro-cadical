@@ -299,7 +299,7 @@ class Base(base.FactorGraphTrainerBase):
         for i, model in enumerate(self.model_list):
             _module(model).load_state_dict(ckpt[i], strict)
 
-    def train(self, G, *train_data):
+    def train(self, G, actions, *train_data):
         total_example_num = 0
         total_loss = np.zeros(len(self.model_list), dtype = np.float32)
         optimizer = optim.Adam(self.get_parameter_list(), lr = self.config['learning_rate'],
@@ -310,9 +310,9 @@ class Base(base.FactorGraphTrainerBase):
                 (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in
                     data]
                 total_example_num += (batch_variable_map.max() + 1)
-                batched_V_drat_logits, batched_v_pre_logits = self.train_batch(total_loss, optimizer, graph_map,
+                batched_V_drat_logits, prediction = self.train_batch(total_loss, optimizer, graph_map,
                                                                                batch_variable_map, batch_function_map,
-                                                                               edge_feature, graph_feat, label, G)
+                                                                               edge_feature, graph_feat, label, G, actions)
 
                 del graph_map
                 del batch_variable_map
@@ -323,10 +323,10 @@ class Base(base.FactorGraphTrainerBase):
 
             for model in self.model_list:
                 base._module(model)._global_step += 1
-        return batched_V_drat_logits, batched_v_pre_logits
+        return batched_V_drat_logits, prediction
 
     def train_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
-            graph_feat, label, G):
+            graph_feat, label, G, actions):
 
         optimizer.zero_grad()
         lambda_value = torch.tensor([self.config['lambda']], dtype = torch.float32, device = self._device)
@@ -373,15 +373,17 @@ class Base(base.FactorGraphTrainerBase):
                                                               torch.float32).squeeze(), core_var_masks,
                                                           core_clause_masks)
 
+
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), self.config['clip_norm'])
             total_loss[i] += loss.detach().cpu().numpy()
 
             for s in state:
                 del s
+            self._update_solution(prediction, model.sat_problem, actions)
 
         optimizer.step()
-        return batched_V_drat_logits, batched_v_pre_logits
+        return batched_V_drat_logits, prediction
 
     # def forward(self, G, data):
     #     for data_item in self.transform_data(data):
@@ -465,6 +467,25 @@ class Base(base.FactorGraphTrainerBase):
             self._logger.info("The model list is %s." % model_list)
 
         return model_list
+
+    def _update_solution(self, prediction, sat_problem, actions):
+        if prediction[0] is None:
+            return
+        sat_problem._solution[actions] = prediction[0].squeeze()[actions]
+        _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
+        assignment = sat_problem._solution * sat_problem._active_variables
+        input_num = torch.mm(vf_map_transpose, assignment.abs())
+        function_eval = torch.mm(signed_vf_map_transpose, assignment)
+        # Compute the de-activated functions
+        deactivated_functions = (function_eval > -input_num).float() * sat_problem._active_functions
+        indices = np.argwhere(deactivated_functions[:, 0] == 1)
+        sat_problem._active_functions[indices, 0] = 0
+        print(f'deactivated_functions: {deactivated_functions.shape}, {indices}, {indices.shape}, {actions}')
+        vf_signed_mask = torch.sparse_coo_tensor(sat_problem._vf_mask_tuple[1]._indices(), sat_problem._edge_feature.squeeze())
+        deactivated_sat = torch.index_select(vf_signed_mask.to_dense(), 0, np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
+        new_indices = np.argwhere(deactivated_sat != 0)
+        print(f'new_indices, {new_indices}, {new_indices.shape}')
+        return deactivated_functions
 
 
 class rl_GNN1(nn.Module):

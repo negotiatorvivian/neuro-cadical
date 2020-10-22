@@ -53,7 +53,7 @@ class SATProblem(object):
 
         self._active_variables = torch.ones(self._variable_num, 1, device = self._device)
         self._active_functions = torch.ones(self._function_num, 1, device = self._device)
-        self._solution = 0.5 * torch.ones(self._variable_num, device = self._device)
+        self._solution = torch.zeros(self._variable_num, device = self._device)
 
         self._batch_size = (self._batch_variable_map.max() + 1).long().item()
         self._is_sat = 0.5 * torch.ones(self._batch_size, device = self._device)
@@ -337,30 +337,30 @@ class PropagatorDecimatorSolverBase(nn.Module):
 
         init_propagator_state, init_decimator_state = init_state
         batch_replication = 1 if is_training else batch_replication
-        sat_problem = SATProblem((graph_map, batch_variable_map, batch_function_map, edge_feature, meta_data, None),
+        self.sat_problem = SATProblem((graph_map, batch_variable_map, batch_function_map, edge_feature, meta_data, None),
             self._device, batch_replication)
 
         if simplify and not is_training:
-            sat_problem.simplify()
+            self.sat_problem.simplify()
 
         if self._propagator is not None and self._decimator is not None:
             propagator_state, decimator_state = self._forward_core(init_propagator_state, init_decimator_state,
-                sat_problem, iteration_num, is_training, check_termination)
+                self.sat_problem, iteration_num, is_training, check_termination)
         else:
             decimator_state = None
             propagator_state = None
 
-        prediction = self._predictor(decimator_state, sat_problem, True)
+        prediction = self._predictor(decimator_state, self.sat_problem, True)
 
         # Post-processing local search
         if not is_training:
-            prediction = self._local_search(prediction, sat_problem, batch_replication)
+            prediction = self._local_search(prediction, self.sat_problem, batch_replication)
 
-        prediction = self._update_solution(prediction, sat_problem)
+        prediction = self._update_solution(prediction, self.sat_problem)
 
         if batch_replication > 1:
             prediction, propagator_state, decimator_state = self._deduplicate(prediction, propagator_state,
-                decimator_state, sat_problem)
+                decimator_state, self.sat_problem)
 
         return (prediction, (propagator_state, decimator_state))
 
