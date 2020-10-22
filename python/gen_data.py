@@ -246,7 +246,7 @@ def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), du
 def data_to_cnf(data, td):
     clauses = []
     for index in range(data.shape[0]):
-        cls = ((np.argwhere(data[index] != 0) + 1) * data[index][np.argwhere(data[index] != 0)]).cpu().numpy()[0]
+        cls = ((np.argwhere(data[index] != 0) + 1) * data[index][np.argwhere(data[index] != 0)]).cpu().numpy().astype(np.int32)[0]
         clauses.append(list(cls))
 
     cnf = CNF(from_clauses = clauses)

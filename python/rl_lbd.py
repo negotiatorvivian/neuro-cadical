@@ -350,7 +350,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
-def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
+def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, logger,
                 device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
 
@@ -358,7 +358,9 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
         tempdir = model.train(G, actions, data)
-        validate(tempdir)
+        logger.write_log(f'actions: {actions}')
+        validate(tempdir, logger)
+
         # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
         # actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         # advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device).clone()
@@ -396,11 +398,14 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
     return None
 
 
-def validate(td):
-    files = recursively_get_files(td, ['cnf'])
+def validate(td, logger):
+    files = recursively_get_files(td.name, ['cnf'])
+
     for file in files:
         res = cadical_fn(file, gpu = True)
+        logger.write_log(res)
         print(res)
+
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
@@ -566,8 +571,7 @@ class Learner:
         #     lr = self.lr)
         # stats = train_step(graphsage, self.model, self.optim, self.batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs,
         #                    advs, device = self.device)
-        stats = train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, device = self.device)
-        # self.write_stats(stats)
+        train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, self.logger, device = self.device)
         # return stats.get('p_loss') + stats.get('v_loss')
         return None
 
