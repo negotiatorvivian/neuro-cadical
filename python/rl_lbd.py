@@ -357,9 +357,8 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
-        cnfs = model.train(G, actions, data)
-        for cnf in cnfs:
-            validate(cnf)
+        tempdir = model.train(G, actions, data)
+        validate(tempdir)
         # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
         # actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         # advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device).clone()
@@ -397,12 +396,11 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
     return None
 
 
-def validate(cnf):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        filename = os.path.join(tmpdir, 'temp.cnf')
-        cnf.to_file(filename)
-    res = cadical_fn(filename, gpu = True)
-    print(res)
+def validate(td):
+    files = recursively_get_files(td, ['cnf'])
+    for file in files:
+        res = cadical_fn(file, gpu = True)
+        print(res)
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):

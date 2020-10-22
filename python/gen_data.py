@@ -11,9 +11,8 @@ import os
 import sys
 from pysat.solvers import Solver
 from pysat.formula import CNF
-
+from uuid import uuid4
 import numpy as np
-# import cnfformula
 import random
 import subprocess
 import h5py as h5
@@ -244,13 +243,15 @@ def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), du
     return nmsdp
 
 
-def data_to_cnf(data):
+def data_to_cnf(data, td):
     clauses = []
     for index in range(data.shape[0]):
         cls = ((np.argwhere(data[index] != 0) + 1) * data[index][np.argwhere(data[index] != 0)]).cpu().numpy()[0]
         clauses.append(list(cls))
 
-    return CNF(from_clauses = clauses)
+    cnf = CNF(from_clauses = clauses)
+    cnf_path = os.path.join(td.name, str(uuid4()) + ".cnf")
+    cnf.to_file(cnf_path)
 
 
 class CNFProcessor:

@@ -6,6 +6,7 @@ import torch.optim as optim
 import numpy as np
 import os
 import itertools
+import tempfile
 
 from sp import trainer
 from sp.factorgraph import dataset, base
@@ -89,7 +90,7 @@ def flip(L_logits):
 
 class GNN1(nn.Module):
     def __init__(self, clause_dim, lit_dim, n_hops, n_layers_C_update, n_layers_L_update, n_layers_score, activation,
-            average_pool = False, normalize = True, **kwargs):
+                 average_pool = False, normalize = True, **kwargs):
         super(GNN1, self).__init__(**kwargs)
         self.L_layer_norm = nn.LayerNorm(lit_dim)  # LayerNorm(16, )
         self.L_init = nn.Parameter(torch.nn.init.xavier_normal_(torch.empty([1, lit_dim])),
@@ -163,7 +164,7 @@ class GNN1(nn.Module):
 
 class GNN1_drat(nn.Module):  # deploy the drat head only
     def __init__(self, clause_dim, lit_dim, n_hops, n_layers_C_update, n_layers_L_update, n_layers_score, activation,
-            average_pool = False, normalize = True, **kwargs):
+                 average_pool = False, normalize = True, **kwargs):
         super(GNN1_drat, self).__init__(**kwargs)
         self.L_layer_norm = nn.LayerNorm(lit_dim)
         self.L_init = nn.Parameter(torch.nn.init.xavier_normal_(torch.empty([1, lit_dim])), requires_grad = True)
@@ -230,7 +231,7 @@ class GNN1_drat(nn.Module):  # deploy the drat head only
 
 class Base(base.FactorGraphTrainerBase):
     def __init__(self, model_cfg, config, device, batcher, batch_replication = 1, average_pool = False,
-            normalize = True, **kwargs):
+                 normalize = True, **kwargs):
         super(Base, self).__init__(config = config, has_meta_data = False, error_dim = config['error_dim'], loss = None,
                                    evaluator = nn.L1Loss(), use_cuda = not kwargs['cpu'], logger = kwargs['logger'])
         self.gnn = rl_GNN1(**model_cfg)
@@ -246,6 +247,7 @@ class Base(base.FactorGraphTrainerBase):
         self.model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
+        self.temp_dir = tempfile.TemporaryDirectory()
 
     def transform_data(self, data):
         # graph_map, batch_variable_map, batch_function_map,edge_feature, graph_feat, label
@@ -306,17 +308,15 @@ class Base(base.FactorGraphTrainerBase):
         total_loss = np.zeros(len(self.model_list), dtype = np.float32)
         optimizer = optim.Adam(self.get_parameter_list(), lr = self.config['learning_rate'],
                                weight_decay = self.config['weight_decay'])
-        cnfs = []
         for (j, data) in enumerate(train_data):
             segment_num = len(data[0])
             for i in range(segment_num):
                 (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in
-                    data]
+                                                                                                           data]
                 total_example_num += (batch_variable_map.max() + 1)
-                temp = self.train_batch(total_loss, optimizer, graph_map,
-                                                                               batch_variable_map, batch_function_map,
-                                                                               edge_feature, graph_feat, label, G, actions)
-                cnfs.extend(temp)
+                self.train_batch(total_loss, optimizer, graph_map,
+                                 batch_variable_map, batch_function_map,
+                                 edge_feature, graph_feat, label, G, actions)
 
                 del graph_map
                 del batch_variable_map
@@ -327,14 +327,14 @@ class Base(base.FactorGraphTrainerBase):
 
             for model in self.model_list:
                 base._module(model)._global_step += 1
-        return cnfs
+        return self.temp_dir
 
     def train_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
-            graph_feat, label, G, actions):
+                    graph_feat, label, G, actions):
 
         optimizer.zero_grad()
         lambda_value = torch.tensor([self.config['lambda']], dtype = torch.float32, device = self._device)
-        prediction, cnfs = None, []
+        prediction = None
         for (i, model) in enumerate(self.model_list[:-1]):
 
             state = base._module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, edge_feature,
@@ -377,25 +377,22 @@ class Base(base.FactorGraphTrainerBase):
                                                               torch.float32).squeeze(), core_var_masks,
                                                           core_clause_masks)
 
-
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), self.config['clip_norm'])
             total_loss[i] += loss.detach().cpu().numpy()
 
             for s in state:
                 del s
-            cnf = self._update_solution(prediction, model.sat_problem, actions)
-            cnfs.append(cnf)
+            self._update_solution(prediction, model.sat_problem, actions)
 
         optimizer.step()
-        return cnfs
 
     # def forward(self, G, data):
     #     for data_item in self.transform_data(data):
     #         p_logits, v_pre_logits = self.train_sp(G, data_item)
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
-            edge_feature, meta_data):
+                      edge_feature, meta_data):
 
         return self._loss_evaluator(variable_prediction = prediction[0], label = label, graph_map = graph_map,
                                     batch_variable_map = batch_variable_map, batch_function_map = batch_function_map,
@@ -495,13 +492,12 @@ class Base(base.FactorGraphTrainerBase):
                                              np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
         deactivated_sat = torch.index_select(deactivated_sat, 1,
                                              np.argwhere(sat_problem._active_variables == 1).squeeze()[0])
-        cnf = data_to_cnf(deactivated_sat)
-        return cnf
+        data_to_cnf(deactivated_sat, self.temp_dir)
 
 
 class rl_GNN1(nn.Module):
     def __init__(self, clause_dim, lit_dim, n_hops, n_layers_C_update, n_layers_L_update, n_layers_score, activation,
-            average_pool = False, normalize = True, **kwargs):
+                 average_pool = False, normalize = True, **kwargs):
         super(rl_GNN1, self).__init__(**kwargs)
         self.L_layer_norm = nn.LayerNorm(lit_dim)
         self.L_init = nn.Parameter(torch.nn.init.xavier_normal_(torch.empty([1, lit_dim])), requires_grad = True)
@@ -583,7 +579,7 @@ class rl_GNN1(nn.Module):
         return self.V_score(V), self.V_vote(V), self.V_score_core(V), self.C_score_core(C)
 
     def _compute_loss(self, batcher, batched_V_drat_logits, batched_V_core_logits, batched_C_core_logits,
-            batched_var_lemma_counts, batched_core_var_masks, batched_core_clause_masks):
+                      batched_var_lemma_counts, batched_core_var_masks, batched_core_clause_masks):
         V_drat_logitss = batcher.unbatch(batched_V_drat_logits, mode = "variable")
         V_core_logitss = batcher.unbatch(batched_V_core_logits, mode = "variable")
         C_core_logitss = batcher.unbatch(batched_C_core_logits, mode = "clause")
