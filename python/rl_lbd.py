@@ -88,8 +88,7 @@ def sample_trajectory(agent, env, cnf, logger):
         rewards.append(reward)
         value_estimates.append(value_estimate)
         # cnfs.append(cnf)
-    # when jump out  of the loop, CL_idxs.C_idxs is []
-    logger.write_log(f"actions: {actions}, rewards: {rewards}, value_estimate: {value_estimates}")
+    # logger.write_log(f"actions: {actions}, rewards: {rewards}, value_estimate: {value_estimates}")
     env.reset()
     return Gs, mu_logitss, actions, rewards, value_estimates, cnfs
 
@@ -244,9 +243,8 @@ class ReplayBuffer:
         Gs, mu_logitss, actions, gs, advs, total_return, cnfs = tau
         # print(gs)
         self.writer.add_scalar("total return", total_return, self.episode_count)
-        print(f'Gs: {len(Gs)}, actions: {len(actions)}, cnfs: {len(cnfs)}')
         for G, mu_logits, action, g, adv, cnf in zip(Gs, mu_logitss, actions, gs, advs, cnfs):
-            self.queue.put((G, mu_logits, action, g, adv, cnf))
+            self.queue.put((G, mu_logits, actions, g, adv, cnf))
 
         print(f"TOTAL RETURN: {gs[0]}")
         self.episode_count += 1
@@ -273,8 +271,24 @@ class ReplayBuffer:
                 gs.append(g)
                 advs.append(adv)
                 cnfs.append(cnf)
-                self.logger.write_log(f'action:{action}, g:{g}, adv:{adv}')
+                self.logger.write_log(f'get batch: action:{action}, g:{g}, adv:{adv}')
             return Gs, mu_logitss, actions, gs, advs, cnfs
+
+    def get_sp_batch(self, batch_size):
+        Gs = []
+        actions = []
+        cnfs = []
+
+        for _ in range(batch_size):
+            G, mu_logits, action, g, adv, cnf = self.queue.get()
+            Gs.append(G)
+            actions.append(action)
+            # mu_logitss.append(mu_logits)
+            # gs.append(g)
+            # advs.append(adv)
+            cnfs.append(cnf)
+            self.logger.write_log(f'get batch: action:{action}')
+        return Gs, actions, cnfs
 
 
 def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
@@ -332,7 +346,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
-def train_batch(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
+def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
                 device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
 
@@ -511,9 +525,9 @@ class Learner:
             self.writer.add_scalar(name, value, self.GLOBAL_STEP_COUNT)
 
     def data_loader(self):
-        yield ray.get(self.buf.get_batch.remote(self.batch_size))
+        yield ray.get(self.buf.get_sp_batch.remote(self.batch_size))
 
-    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs):
+    def train_batch(self, Gs, actions, cnfs):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
         self.logger.write_log(f"G: {G.size()}")
@@ -540,7 +554,7 @@ class Learner:
         #     lr = self.lr)
         # stats = train_step(graphsage, self.model, self.optim, self.batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs,
         #                    advs, device = self.device)
-        stats = train_batch(self.model, self.optim, self.batcher, G, batch_size, None, None, None, mu_logitss, actions, gs, advs, cnfs, device = self.device)
+        stats = train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, device = self.device)
         # self.write_stats(stats)
         # return stats.get('p_loss') + stats.get('v_loss')
         return None
