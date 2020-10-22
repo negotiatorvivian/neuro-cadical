@@ -244,6 +244,15 @@ def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), du
     return nmsdp
 
 
+def data_to_cnf(data):
+    clauses = []
+    for index in range(data.shape[0]):
+        cls = ((np.argwhere(data[index] != 0) + 1) * data[index][np.argwhere(data[index] != 0)]).cpu().numpy()[0]
+        clauses.append(list(cls))
+
+    return CNF(from_clauses = clauses)
+
+
 class CNFProcessor:
     def __init__(self, cnfdataset, tmpdir = None, use_glue_counts = True, timeout = None):
         if tmpdir is None:

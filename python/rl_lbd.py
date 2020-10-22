@@ -24,6 +24,7 @@ from batch import Batcher
 from util import files_with_extension, recursively_get_files, load_data, set_env
 from data_util import coo
 from train1 import TrainLogger, Trainer
+from solver import cadical_fn
 
 
 def discount_cumsum(x, discount = 1):
@@ -356,9 +357,11 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
-        pre_policy_logitss, prediction = model.train(G, actions, data)
+        cnfs = model.train(G, actions, data)
+        for cnf in cnfs:
+            validate(cnf)
         # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
-        actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
+        # actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         # advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device).clone()
         #
         # policy_distribs = [Categorical(logits = x.squeeze().to(device).clone()) for x in policy_logitss]
@@ -392,6 +395,14 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
         # optim.step()
     # return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
     return None
+
+
+def validate(cnf):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filename = os.path.join(tmpdir, 'temp.cnf')
+        cnf.to_file(filename)
+    res = cadical_fn(filename, gpu = True)
+    print(res)
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):

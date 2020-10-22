@@ -5,11 +5,13 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import os
+import itertools
 
 from sp import trainer
 from sp.factorgraph import dataset, base
 from sp.nn import solver
 from sp.nn.util import SatCNFEvaluator, SatLossEvaluator
+from gen_data import data_to_cnf
 from train1 import *
 from gen_data import lemma_occ
 
@@ -304,15 +306,17 @@ class Base(base.FactorGraphTrainerBase):
         total_loss = np.zeros(len(self.model_list), dtype = np.float32)
         optimizer = optim.Adam(self.get_parameter_list(), lr = self.config['learning_rate'],
                                weight_decay = self.config['weight_decay'])
+        cnfs = []
         for (j, data) in enumerate(train_data):
             segment_num = len(data[0])
             for i in range(segment_num):
                 (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in
                     data]
                 total_example_num += (batch_variable_map.max() + 1)
-                batched_V_drat_logits, prediction = self.train_batch(total_loss, optimizer, graph_map,
+                temp = self.train_batch(total_loss, optimizer, graph_map,
                                                                                batch_variable_map, batch_function_map,
                                                                                edge_feature, graph_feat, label, G, actions)
+                cnfs.extend(temp)
 
                 del graph_map
                 del batch_variable_map
@@ -323,14 +327,14 @@ class Base(base.FactorGraphTrainerBase):
 
             for model in self.model_list:
                 base._module(model)._global_step += 1
-        return batched_V_drat_logits, prediction
+        return cnfs
 
     def train_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
             graph_feat, label, G, actions):
 
         optimizer.zero_grad()
         lambda_value = torch.tensor([self.config['lambda']], dtype = torch.float32, device = self._device)
-        prediction = None
+        prediction, cnfs = None, []
         for (i, model) in enumerate(self.model_list[:-1]):
 
             state = base._module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, edge_feature,
@@ -380,10 +384,11 @@ class Base(base.FactorGraphTrainerBase):
 
             for s in state:
                 del s
-            self._update_solution(prediction, model.sat_problem, actions)
+            cnf = self._update_solution(prediction, model.sat_problem, actions)
+            cnfs.append(cnf)
 
         optimizer.step()
-        return batched_V_drat_logits, prediction
+        return cnfs
 
     # def forward(self, G, data):
     #     for data_item in self.transform_data(data):
@@ -471,21 +476,27 @@ class Base(base.FactorGraphTrainerBase):
     def _update_solution(self, prediction, sat_problem, actions):
         if prediction[0] is None:
             return
+        actions = list(itertools.chain.from_iterable(actions))
+        print(f'actions: {actions}')
         sat_problem._solution[actions] = prediction[0].squeeze()[actions]
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
+        _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         assignment = sat_problem._solution * sat_problem._active_variables
+        print(f'assignment: {assignment.shape}, {assignment}')
         input_num = torch.mm(vf_map_transpose, assignment.abs())
         function_eval = torch.mm(signed_vf_map_transpose, assignment)
         # Compute the de-activated functions
         deactivated_functions = (function_eval > -input_num).float() * sat_problem._active_functions
         indices = np.argwhere(deactivated_functions[:, 0] == 1)
         sat_problem._active_functions[indices, 0] = 0
-        print(f'deactivated_functions: {deactivated_functions.shape}, {indices}, {indices.shape}, {actions}')
-        vf_signed_mask = torch.sparse_coo_tensor(sat_problem._vf_mask_tuple[1]._indices(), sat_problem._edge_feature.squeeze())
-        deactivated_sat = torch.index_select(vf_signed_mask.to_dense(), 0, np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
-        new_indices = np.argwhere(deactivated_sat != 0)
-        print(f'new_indices, {new_indices}, {new_indices.shape}')
-        return deactivated_functions
+        print(f'deactivated_functions: {deactivated_functions.shape}, {indices}, {indices.shape}')
+        sat_problem._active_variables[actions] = 0
+        deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
+                                             np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
+        deactivated_sat = torch.index_select(deactivated_sat, 1,
+                                             np.argwhere(sat_problem._active_variables == 1).squeeze()[0])
+        cnf = data_to_cnf(deactivated_sat)
+        return cnf
 
 
 class rl_GNN1(nn.Module):
