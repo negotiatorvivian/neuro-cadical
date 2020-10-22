@@ -276,7 +276,10 @@ class ReplayBuffer:
 
     def get_sp_batch(self, batch_size):
         Gs = []
+        mu_logitss = []
         actions = []
+        gs = []
+        advs = []
         cnfs = []
 
         for _ in range(batch_size):
@@ -288,7 +291,7 @@ class ReplayBuffer:
             # advs.append(adv)
             cnfs.append(cnf)
             self.logger.write_log(f'get batch: action:{action}')
-        return Gs, actions, cnfs
+        return Gs, mu_logitss, actions, gs, advs, cnfs
 
 
 def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
@@ -527,7 +530,7 @@ class Learner:
     def data_loader(self):
         yield ray.get(self.buf.get_sp_batch.remote(self.batch_size))
 
-    def train_batch(self, Gs, actions, cnfs):
+    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
         self.logger.write_log(f"G: {G.size()}")
