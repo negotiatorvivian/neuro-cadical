@@ -51,6 +51,7 @@ class MessageAggregator(nn.Module):
     def forward(self, state, feature, mask, mask_transpose, edge_mask=None):
 
         # Apply the pre-aggregation transform
+
         if self._mem_hidden_dimension > 0 and self._mem_agg_hidden_dimension > 0:
             state = F.logsigmoid(self._W2_m(F.logsigmoid(self._W1_m(state))))
 

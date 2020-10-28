@@ -18,13 +18,13 @@ import tempfile
 from uuid import uuid4
 
 from satenv import SatEnv
-from gnn import defaultGNN1Cfg, Base
-from gnn import rl_GNN1 as GNN1
-from batch import Batcher
-from util import files_with_extension, recursively_get_files, load_data, set_env
-from data_util import coo
-from train1 import TrainLogger, Trainer
-from solver import cadical_fn
+from python.gnn import defaultGNN1Cfg, Base
+from python.gnn import rl_GNN1 as GNN1
+from python.batch import Batcher
+from python.util import files_with_extension, recursively_get_files, load_data, set_env
+from python.data_util import coo
+from python.train1 import TrainLogger, Trainer
+from python.solver import cadical_fn
 
 
 def discount_cumsum(x, discount = 1):
@@ -78,14 +78,24 @@ def sample_trajectory(agent, env, cnf, logger):
 
     CL_idxs = env.render()
     terminal_flag = False
+    data = cnf_to_data(cnfs)
+    active_variables = np.ones(CL_idxs.n_vars)
+    prediction = agent.predict(data)[0]
+
     while not terminal_flag:
         G = mk_G(CL_idxs)
         mu_logits, value_estimate = agent.act(G)
         action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
-        CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
-        Gs.append(G)
-        mu_logitss.append(mu_logits)
         actions.append(action)
+        new_prediction = prediction[active_variables > 0]
+        active_variables[actions] = 0
+        # CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
+        value = 1 if new_prediction[action - 1] > 0.5 else -1
+        CL_idxs, reward, terminal_flag = env.step(value * action)
+        Gs.append(G)
+        if not terminal_flag:
+            print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}, prediction: {prediction}')
+        mu_logitss.append(mu_logits)
         rewards.append(reward)
         value_estimates.append(value_estimate)
         # cnfs.append(cnf)
@@ -103,7 +113,6 @@ def cnf_to_data(cnfs):
         signs = np.array([1] * (2 * n_vars))
         signs[cnf.nv:] = -1
         edge_features = signs[L_idxs]
-        L_idxs = L_idxs
         L_idxs[L_idxs > n_vars - 1] -= n_vars
         indices = torch.stack([torch.from_numpy(L_idxs).type(torch.long), torch.from_numpy(C_idxs).type(torch.long)])
         result = cnf.is_sat
@@ -111,6 +120,14 @@ def cnf_to_data(cnfs):
         results.append((n_vars, n_cls, indices, edge_features, answers, float(result), []))
     # return torch.sparse.FloatTensor(indices = indices, values = torch.from_numpy(edge_features), size = size)
     return results
+
+
+def cl_idx_to_data(CL_idxs, action, answers):
+    n_vars = CL_idxs.n_vars
+    n_cls = CL_idxs.n_clauses
+    indices = torch.stack([torch.from_numpy(CL_idxs.L_idxs).type(torch.long), torch.from_numpy(CL_idxs.C_idxs).type(torch.long)])
+    temp_ans = np.array(answers)[action] = 0
+    temp_ans = temp_ans[temp_ans != 0]
 
 
 def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, last_val = 0, gam = 1.0, lam = 1.0):
@@ -141,21 +158,26 @@ class RandomAgent(Agent):
 
 
 class NeuroAgent(Agent):
-    def __init__(self, model_cfg = defaultGNN1Cfg, model_state_dict = None):
-        self.model = GNN1(**model_cfg)
+    def __init__(self, model, model_state_dict = None):
+        self.model = model
+        self.gnn = model.model_list[1]
         if model_state_dict is not None:
-            self.model.load_state_dict(model_state_dict)
+            self.gnn.load_state_dict(model_state_dict)
 
     def act(self, G):
-        p_logits, v_pre_logits, _, _ = self.model(G)
+        p_logits, v_pre_logits, _, _ = self.gnn(G)
         return p_logits.squeeze().detach(), torch.sigmoid(v_pre_logits.mean()).detach()
+
+    def predict(self, actions, train_data, active_variables):
+        prediction = self.model.validate(actions, active_variables, train_data)
+        return prediction[0]
 
     def set_weights(self, model_state_dict):
         self.model.load_state_dict(model_state_dict)
 
 
 class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
-    def __init__(self, buf, weight_manager, logdir, model_cfg = defaultGNN1Cfg, model_state_dict = None,
+    def __init__(self, buf, weight_manager, logdir, model_cfg, sp_config, model_state_dict = None,
                  from_cnf = None, from_file = None, seed = None, sync_freq = 10, restore = True):
         self.buf = buf
         self.weight_manager = weight_manager
@@ -169,7 +191,9 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
         self.sync_freq = sync_freq
         self.ckpt_rank = 0
         self.trajectory_count = 0
-        self.agent = NeuroAgent(model_cfg = model_cfg)
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        model = Base(model_cfg, sp_config, self.device, Batcher(), cpu = True, logger = self.logger)
+        self.agent = NeuroAgent(model)
         if restore:
             self.try_update_weights()
         print("WORKER INITIALIZED")
@@ -183,7 +207,7 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             # from_cnf.to_file(cnf_path)
             try:
                 # self.env = SatEnv(cnf_path)
-                self.cnf = CNF(from_file = from_cnf)
+                self.cnf = CNF(from_file = from_cnf, id = uuid4())
                 print(f'self.cnf: {self.cnf}')
             except RuntimeError as e:
                 print("BAD CNF:", from_cnf)
@@ -405,7 +429,6 @@ def validate(td, logger):
         res = cadical_fn(file, gpu = True)
         logger.write_log(res)
         print(res)
-
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
@@ -673,9 +696,9 @@ def _parse_main():
     parser.add_argument("--lr", dest = "lr", type = float, action = "store", default = 1e-4)
     parser.add_argument("--root-dir", dest = "root_dir", action = "store")
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
-    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 2)
+    parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 1)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
-    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 25, type = int)
+    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 15, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
     parser.add_argument("--sp-cfg", dest = "sp_cfg", action = "store", default = None)
 
@@ -728,7 +751,7 @@ def _main(is_train = True):
     # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they
     # TODO:  are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
     workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, logdir = opts.log_dir,
-                                                model_cfg = model_cfg) for _ in range(opts.n_workers)]
+                                                model_cfg = model_cfg, sp_config = opts.sp_config) for _ in range(opts.n_workers)]
     pool = ActorPool(workers)
 
     def shuffle_environments(ws):

@@ -45,6 +45,7 @@ class NeuralPredictor(nn.Module):
 
             self._module_list.append(self._function_aggregator)
             self._module_list.append(self._function_classifier)
+        self.meta_data_dimension = meta_data_dimension
 
     def forward(self, decimator_state, sat_problem, last_call=False):
 
@@ -65,11 +66,11 @@ class NeuralPredictor(nn.Module):
             edge_mask = None
 
         if self._variable_classifier is not None:
-
             aggregated_variable_state = torch.cat((decimator_variable_state, sat_problem._edge_feature), 1)
 
             if sat_problem._meta_data is not None:
-                aggregated_variable_state = torch.cat((aggregated_variable_state, graph_feat), 1)
+                if graph_feat.size(1) == self.meta_data_dimension:
+                    aggregated_variable_state = torch.cat((aggregated_variable_state, graph_feat), 1)
 
             aggregated_variable_state = self._variable_aggregator(
                 aggregated_variable_state, None, variable_mask, variable_mask_transpose, edge_mask)
@@ -81,7 +82,8 @@ class NeuralPredictor(nn.Module):
             aggregated_function_state = torch.cat((decimator_function_state, sat_problem._edge_feature), 1)
 
             if sat_problem._meta_data is not None:
-                aggregated_function_state = torch.cat((aggregated_function_state, graph_feat), 1)
+                if graph_feat.size(1) == self.meta_data_dimension:
+                    aggregated_function_state = torch.cat((aggregated_function_state, graph_feat), 1)
 
             aggregated_function_state = self._function_aggregator(
                 aggregated_function_state, None, function_mask, function_mask_transpose, edge_mask)

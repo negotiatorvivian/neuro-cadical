@@ -48,6 +48,7 @@ class NeuralDecimator(nn.Module):
         self._agg_hidden_dimension = agg_hidden_dimension
         self._mem_agg_hidden_dimension = mem_agg_hidden_dimension
         self.flag = False
+        self.meta_data_dimension = meta_data_dimension
 
     def forward(self, init_state, message_state, sat_problem, is_training, active_mask=None):
         if self.flag is False:
@@ -74,7 +75,8 @@ class NeuralDecimator(nn.Module):
         variable_state = torch.cat((variable_state, sat_problem._edge_feature), 1)
 
         if sat_problem._meta_data is not None:
-            variable_state = torch.cat((variable_state, graph_feat), 1)
+            if graph_feat.size(1) == self.meta_data_dimension:
+                variable_state = torch.cat((variable_state, graph_feat), 1)
 
         variable_state = mask * self._variable_rnn_cell(variable_state, init_state[0]) + (1 - mask) * init_state[0]
 
@@ -82,7 +84,8 @@ class NeuralDecimator(nn.Module):
         function_state = torch.cat((function_state, sat_problem._edge_feature), 1)
 
         if sat_problem._meta_data is not None:
-            function_state = torch.cat((function_state, graph_feat), 1)
+            if graph_feat.size(1) == self.meta_data_dimension:
+                function_state = torch.cat((function_state, graph_feat), 1)
 
         function_state = mask * self._function_rnn_cell(function_state, init_state[1]) + (1 - mask) * init_state[1]
 

@@ -8,13 +8,13 @@ import os
 import itertools
 import tempfile
 
-from sp import trainer
-from sp.factorgraph import dataset, base
-from sp.nn import solver
-from sp.nn.util import SatCNFEvaluator, SatLossEvaluator
-from gen_data import data_to_cnf
-from train1 import *
-from gen_data import lemma_occ
+from python.sp import trainer
+from python.sp.factorgraph import dataset, base
+from python.sp.nn import solver
+from python.sp.nn.util import SatCNFEvaluator, SatLossEvaluator
+from python.gen_data import data_to_cnf
+from python.train1 import *
+from python.gen_data import lemma_occ
 
 
 def _module(model):
@@ -341,17 +341,18 @@ class Base(base.FactorGraphTrainerBase):
                                                        graph_feat, self.config['randomized'])
 
             loss = torch.zeros(1, device = self._device)
-            mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_feature)).squeeze().float(),
-                                           [int(G.shape[1] / 2), G.shape[0]]).unsqueeze(1).to_dense()
-            var_lemma_counts = lemma_occ(mask)
-            if np.all(label.cpu().numpy()):
-                core_var_masks = graph_feat.view([1, -1]).squeeze()
-                core_clause_masks = torch.ones(G.shape[0])
-            else:
-                core_var_masks = torch.from_numpy(np.ones(int(G.shape[1] / 2), dtype = np.int32))
-                positive_edges = torch.zeros(edge_feature.shape)
-                positive_edges[edge_feature > 0] = edge_feature[edge_feature > 0]
-                core_clause_masks = torch.from_numpy(np.all(positive_edges.numpy(), axis = 1))
+            if G:
+                mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_feature)).squeeze().float(),
+                                               [int(G.shape[1] / 2), G.shape[0]]).unsqueeze(1).to_dense()
+                var_lemma_counts = lemma_occ(mask)
+                if np.all(label.cpu().numpy()):
+                    core_var_masks = graph_feat.view([1, -1]).squeeze()
+                    core_clause_masks = torch.ones(G.shape[0])
+                else:
+                    core_var_masks = torch.from_numpy(np.ones(int(G.shape[1] / 2), dtype = np.int32))
+                    positive_edges = torch.zeros(edge_feature.shape)
+                    positive_edges[edge_feature > 0] = edge_feature[edge_feature > 0]
+                    core_clause_masks = torch.from_numpy(np.all(positive_edges.numpy(), axis = 1))
 
             for t in torch.arange(self.config['train_outer_recurrence_num'], dtype = torch.int32,
                                   device = self._device):
@@ -376,7 +377,7 @@ class Base(base.FactorGraphTrainerBase):
                                                           torch.from_numpy(np.array([var_lemma_counts])).type(
                                                               torch.float32).squeeze(), core_var_masks,
                                                           core_clause_masks)
-
+            print('loss:', loss)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), self.config['clip_norm'])
             total_loss[i] += loss.detach().cpu().numpy()
@@ -479,20 +480,52 @@ class Base(base.FactorGraphTrainerBase):
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         assignment = sat_problem._solution * sat_problem._active_variables
-        print(f'assignment: {assignment.shape}, {assignment}')
+        # print(f'assignment: {assignment.shape}, {assignment}')
         input_num = torch.mm(vf_map_transpose, assignment.abs())
         function_eval = torch.mm(signed_vf_map_transpose, assignment)
-        # Compute the de-activated functions
+        # Compute the de-activated functions -> deactivated_functions表示为真的子句
         deactivated_functions = (function_eval > -input_num).float() * sat_problem._active_functions
         indices = np.argwhere(deactivated_functions[:, 0] == 1)
         sat_problem._active_functions[indices, 0] = 0
-        print(f'deactivated_functions: {deactivated_functions.shape}, {indices}, {indices.shape}')
+        print(f'all clauses: {deactivated_functions.shape}, removed clauses： {indices.shape}')
         sat_problem._active_variables[actions] = 0
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
                                              np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
         deactivated_sat = torch.index_select(deactivated_sat, 1,
                                              np.argwhere(sat_problem._active_variables == 1).squeeze()[0])
         data_to_cnf(deactivated_sat, self.temp_dir)
+
+    def validate(self, train_data, batch_replication = 1):
+        predictions = []
+        for (j, data) in enumerate(self.transform_data(train_data)):
+            segment_num = len(data[0])
+            for i in range(segment_num):
+                (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in data]
+                prediction = self.validate_batch(graph_map, batch_variable_map, batch_function_map,
+                                    edge_feature, graph_feat, label, batch_replication)
+                predictions.append(prediction)
+
+                del graph_map
+                del batch_variable_map
+                del batch_function_map
+                del edge_feature
+                del graph_feat
+                del label
+
+        return predictions
+
+    def validate_batch(self, graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, batch_replication):
+        prediction = None
+        for (i, model) in enumerate(self.model_list[:-1]):
+            state = base._module(model).get_init_state(graph_map, batch_variable_map, batch_function_map, edge_feature,
+                                                       graph_feat, False, 1)
+            prediction, _ = model(
+                init_state = state, graph_map = graph_map, batch_variable_map = batch_variable_map,
+                batch_function_map = batch_function_map, edge_feature = edge_feature,
+                meta_data = graph_feat, is_training = False, iteration_num = self.config['test_recurrence_num'],
+                check_termination = None, batch_replication = batch_replication)
+
+        return prediction
 
 
 class rl_GNN1(nn.Module):
@@ -606,5 +639,4 @@ class rl_GNN1(nn.Module):
 
         loss = drat_loss + 0.1 * core_loss + 0.01 * core_clause_loss + l2_loss
         # loss = drat_loss + 0.01 * core_clause_loss + l2_loss
-        print('loss:', loss)
         return loss  # loss.backward()  # nn.utils.clip_grad_value_(self.parameters(), 100)  # nn.utils.clip_grad_norm_(self.parameters(), 10)
