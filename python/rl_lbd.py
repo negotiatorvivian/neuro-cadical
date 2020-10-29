@@ -89,7 +89,7 @@ def sample_trajectory(agent, env, cnf, logger):
         action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
         actions.append(action)
         new_prediction = prediction[np.argwhere(active_variables > 0)]
-        active_variables[actions] = 0
+        active_variables[np.array(actions) - 1] = 0
         # CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
         value = 1 if new_prediction[action - 1] > 0.5 else -1
         CL_idxs, reward, terminal_flag = env.step(value * action)
