@@ -79,22 +79,23 @@ def sample_trajectory(agent, env, cnf, logger):
     CL_idxs = env.render()
     terminal_flag = False
     data = cnf_to_data(cnfs)
-    active_variables = np.ones(CL_idxs.n_vars)
-    prediction = agent.predict(data)[0]
+    active_variables = np.ones(CL_idxs.n_vars, dtype = int)
+    prediction, _ = agent.predict(data)
+    print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
 
     while not terminal_flag:
         G = mk_G(CL_idxs)
         mu_logits, value_estimate = agent.act(G)
         action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
         actions.append(action)
-        new_prediction = prediction[active_variables > 0]
+        new_prediction = prediction[np.argwhere(active_variables > 0)]
         active_variables[actions] = 0
         # CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
         value = 1 if new_prediction[action - 1] > 0.5 else -1
         CL_idxs, reward, terminal_flag = env.step(value * action)
         Gs.append(G)
         if not terminal_flag:
-            print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}, prediction: {prediction}')
+            print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}')
         mu_logitss.append(mu_logits)
         rewards.append(reward)
         value_estimates.append(value_estimate)
@@ -168,8 +169,8 @@ class NeuroAgent(Agent):
         p_logits, v_pre_logits, _, _ = self.gnn(G)
         return p_logits.squeeze().detach(), torch.sigmoid(v_pre_logits.mean()).detach()
 
-    def predict(self, actions, train_data, active_variables):
-        prediction = self.model.validate(actions, active_variables, train_data)
+    def predict(self, train_data):
+        prediction = self.model.validate(train_data)
         return prediction[0]
 
     def set_weights(self, model_state_dict):
@@ -208,7 +209,6 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             try:
                 # self.env = SatEnv(cnf_path)
                 self.cnf = CNF(from_file = from_cnf, id = uuid4())
-                print(f'self.cnf: {self.cnf}')
             except RuntimeError as e:
                 print("BAD CNF:", from_cnf)
                 raise e
