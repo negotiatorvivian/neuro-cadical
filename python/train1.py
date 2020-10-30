@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -11,15 +12,16 @@ import time
 import yaml
 import torch.multiprocessing as mp
 
+import numpy as np
+
 from python.util import check_make_path, files_with_extension, load_data
-from python.gnn import *
+# from python.gnn import *
 from python.batch import Batcher
 from python.data_util import H5Dataset, BatchedIterable, mk_H5DataLoader
-from sp.factorgraph.dataset import DynamicBatchDivider
-from sp.nn.util import SatLossEvaluator
-from sp.trainer import Perceptron
-from sp.nn import solver
-import util
+from python.sp.factorgraph.dataset import DynamicBatchDivider
+from python.sp.nn.util import SatLossEvaluator
+from python.sp.trainer import Perceptron
+from python.sp.nn import solver
 
 
 def compute_softmax_kldiv_loss(logitss, probss):
@@ -318,7 +320,7 @@ class Trainer:
         self.optimizer = optim.Adam(self.model.parameters(), lr = self.lr, betas = (0.9, 0.98))
         self.batch_divider = DynamicBatchDivider(limit // batch_replication, self.config['hidden_dim'])
         self.model_list = [self._set_device(model) for model in self._build_graph(self.config)]
-        util.check_make_path(self.ckpt_dir)
+        check_make_path(self.ckpt_dir)
         if restore:
             try:
                 self.load_latest_ckpt()
@@ -720,29 +722,29 @@ def _main_train1(cfg = None, opts = None):
         with open(opts.sp_cfg, 'r') as f:
             sp_cfg = yaml.load(f)
 
-    model = GNN1(**cfg)
+    # model = GNN1(**cfg)
+    #
+    # dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers, 'nmsdp')
+    # trainer = Trainer(model, dataset, sp_cfg, opts.lr, root_dir = [opts.ckpt_dir], ckpt_freq = opts.ckpt_freq,
+    #                   restore = False, n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
+    #
+    # if opts.forever is True:
+    #     while True:
+    #         trainer.train()
+    # else:
+    #     trainer.train()
 
-    dataset = mk_H5DataLoader(opts.data_dir, opts.batch_size, opts.n_data_workers, 'nmsdp')
-    trainer = Trainer(model, dataset, sp_cfg, opts.lr, root_dir = [opts.ckpt_dir], ckpt_freq = opts.ckpt_freq,
-                      restore = False, n_steps = opts.n_steps, n_epochs = opts.n_epochs, index = opts.index)
 
-    if opts.forever is True:
-        while True:
-            trainer.train()
-    else:
-        trainer.train()
-
-
-def _test_trainer(opts = None):
-    if opts is None:
-        opts = _parse_main()
-    model = GNN1(**defaultGNN1Cfg)
-    optimizer = optim.Adam(model.parameters(), lr = 1e-4)
-    dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
-    trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
-                      n_steps = opts.n_steps)
-    for _ in range(5):
-        trainer.train()  # trainer.load_latest_ckpt()
+# def _test_trainer(opts = None):
+#     if opts is None:
+#         opts = _parse_main()
+#     model = GNN1(**defaultGNN1Cfg)
+#     optimizer = optim.Adam(model.parameters(), lr = 1e-4)
+#     dataset = mk_H5DataLoader("./train_data/", batch_size = 16, num_workers = 2)
+#     trainer = Trainer(model, dataset, optimizer, ckpt_dir = "./test_weights/", ckpt_freq = 10, restore = True,
+#                       n_steps = opts.n_steps)
+#     for _ in range(5):
+#         trainer.train()  # trainer.load_latest_ckpt()
 
 
 GNN1Cfg0 = {

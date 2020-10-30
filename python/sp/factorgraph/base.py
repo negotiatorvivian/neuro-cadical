@@ -31,11 +31,11 @@ class FactorGraphTrainerBase:
         self._logger = logger
         self._use_cuda = use_cuda and torch.cuda.is_available()
         
-        if config['verbose']:
-            if self._use_cuda:
-                self._logger.info('Using GPU...')
-            else:
-                self._logger.info('Using CPU...')
+        # if config['verbose']:
+        #     if self._use_cuda:
+        #         self._logger.info('Using GPU...')
+        #     else:
+        #         self._logger.info('Using CPU...')
         
         self._device = torch.device("cuda" if self._use_cuda else "cpu")
 

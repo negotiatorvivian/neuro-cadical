@@ -94,9 +94,9 @@ class SatFactorGraphTrainer(FactorGraphTrainerBase):
                     pi=config['pi'], decimation_probability=config['decimation_probability'],
                     local_search_iterations=config['local_search_iteration'], epsilon=config['epsilon'])]
 
-        if config['verbose']:
-            self._logger.info("The model parameter count is %d." % model_list[0].parameter_count())
-            self._logger.info("The model list is %s." % model_list)
+        # if config['verbose']:
+        #     self._logger.info("The model parameter count is %d." % model_list[0].parameter_count())
+        #     self._logger.info("The model list is %s." % model_list)
 
 
         return model_list

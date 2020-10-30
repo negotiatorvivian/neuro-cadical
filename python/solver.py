@@ -14,9 +14,9 @@ import ray
 from ray.util import ActorPool
 from ray.util.multiprocessing import Pool
 
-import util
-from util import recursively_get_files
-from config import CADICAL_PATH
+import python.util
+from python.util import recursively_get_files
+from python.config import CADICAL_PATH
 
 
 class DummyWorker:

@@ -13,7 +13,7 @@ from python.sp.factorgraph import dataset, base
 from python.sp.nn import solver
 from python.sp.nn.util import SatCNFEvaluator, SatLossEvaluator
 from python.gen_data import data_to_cnf
-from python.train1 import *
+from python.train1 import compute_softmax_kldiv_loss_from_logits, compute_mask_loss
 from python.gen_data import lemma_occ
 
 
@@ -341,7 +341,7 @@ class Base(base.FactorGraphTrainerBase):
                                                        graph_feat, self.config['randomized'])
 
             loss = torch.zeros(1, device = self._device)
-            if G:
+            if G is not None:
                 mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_feature)).squeeze().float(),
                                                [int(G.shape[1] / 2), G.shape[0]]).unsqueeze(1).to_dense()
                 var_lemma_counts = lemma_occ(mask)
@@ -465,9 +465,6 @@ class Base(base.FactorGraphTrainerBase):
                                                          local_search_iterations = config['local_search_iteration'],
                                                          epsilon = config['epsilon'])]
 
-        if config['verbose']:
-            self._logger.info("The model parameter count is %d." % model_list[0].parameter_count())
-            self._logger.info("The model list is %s." % model_list)
 
         return model_list
 

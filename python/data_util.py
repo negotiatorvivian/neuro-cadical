@@ -12,7 +12,7 @@ import itertools
 from math import ceil
 import torch.utils.data as td
 
-from util import *
+from python.util import *
 
 NMSDP = collections.namedtuple(  # all fields besides dp_id must be numpy arrays
     "NMSDP", ["dp_id", "is_train", "is_sat", "n_vars", "n_clauses", "C_idxs", "L_idxs", "core_var_mask",

@@ -75,6 +75,8 @@ def sample_trajectory(agent, env, cnf, logger):
     rewards = []
     value_estimates = []
     cnfs = [cnf]
+    name = cnf.id
+    # print(f'-------name: {name}')
 
     CL_idxs = env.render()
     terminal_flag = False
@@ -102,7 +104,7 @@ def sample_trajectory(agent, env, cnf, logger):
         # cnfs.append(cnf)
     # logger.write_log(f"actions: {actions}, rewards: {rewards}, value_estimate: {value_estimates}")
     env.reset()
-    return Gs, mu_logitss, actions, rewards, value_estimates, cnfs
+    return Gs, mu_logitss, actions, rewards, value_estimates, cnfs, name
 
 
 def cnf_to_data(cnfs):
@@ -131,13 +133,13 @@ def cl_idx_to_data(CL_idxs, action, answers):
     temp_ans = temp_ans[temp_ans != 0]
 
 
-def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, last_val = 0, gam = 1.0, lam = 1.0):
+def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, name, last_val = 0, gam = 1.0, lam = 1.0):
     gs = discount_cumsum(rewards, int(gam))
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
                                                                                        :-1]  # future advantage
     adv = discount_cumsum(deltas, int(gam * lam))
     data = cnf_to_data(cnfs)
-    return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data  # note, gs[0] is total value
+    return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data, name  # note, gs[0] is total value
 
 
 class Agent:
@@ -208,7 +210,7 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             # from_cnf.to_file(cnf_path)
             try:
                 # self.env = SatEnv(cnf_path)
-                self.cnf = CNF(from_file = from_cnf, id = uuid4())
+                self.cnf = CNF(from_file = from_cnf, id = paths[-1])
             except RuntimeError as e:
                 print("BAD CNF:", from_cnf)
                 raise e
@@ -265,11 +267,11 @@ class ReplayBuffer:
         return self.episode_count
 
     def ingest_trajectory(self, tau):
-        Gs, mu_logitss, actions, gs, advs, total_return, cnfs = tau
+        Gs, mu_logitss, actions, gs, advs, total_return, cnfs, name = tau
         # print(gs)
         self.writer.add_scalar("total return", total_return, self.episode_count)
         for G, mu_logits, action, g, adv, cnf in zip(Gs, mu_logitss, actions, gs, advs, cnfs):
-            self.queue.put((G, mu_logits, actions, g, adv, cnf))
+            self.queue.put((G, mu_logits, actions, g, adv, cnf, name))
 
         print(f"TOTAL RETURN: {gs[0]}")
         self.episode_count += 1
@@ -289,7 +291,7 @@ class ReplayBuffer:
             cnfs = []
 
             for _ in range(batch_size):
-                G, mu_logits, action, g, adv, cnf = self.queue.get()
+                G, mu_logits, action, g, adv, cnf, name = self.queue.get()
                 Gs.append(G)
                 mu_logitss.append(mu_logits)
                 actions.append(action)
@@ -297,7 +299,7 @@ class ReplayBuffer:
                 advs.append(adv)
                 cnfs.append(cnf)
                 self.logger.write_log(f'get batch: action:{action}, g:{g}, adv:{adv}')
-            return Gs, mu_logitss, actions, gs, advs, cnfs
+            return Gs, mu_logitss, actions, gs, advs, cnfs, name
 
     def get_sp_batch(self, batch_size):
         Gs = []
@@ -308,7 +310,7 @@ class ReplayBuffer:
         cnfs = []
 
         for _ in range(batch_size):
-            G, mu_logits, action, g, adv, cnf = self.queue.get()
+            G, mu_logits, action, g, adv, cnf, name = self.queue.get()
             Gs.append(G)
             actions.append(action)
             # mu_logitss.append(mu_logits)
@@ -316,7 +318,7 @@ class ReplayBuffer:
             # advs.append(adv)
             cnfs.append(cnf)
             self.logger.write_log(f'get batch: action:{action}')
-        return Gs, mu_logitss, actions, gs, advs, cnfs
+        return Gs, mu_logitss, actions, gs, advs, cnfs, name
 
 
 def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
@@ -374,7 +376,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
-def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, logger,
+def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, name, logger,
                 device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
 
@@ -382,8 +384,9 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, l
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
         tempdir = model.train(G, actions, data)
-        logger.write_log(f'actions: {actions}')
-        validate(tempdir, logger)
+        # logger.write_log(f'cnf: {cnfs[0].id}, actions: {actions}')
+        # print(f'cnf: {cnfs[0].id}, length: {len(cnfs)}, actions: {actions}')
+        validate(tempdir, name, logger)
 
         # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
         # actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
@@ -422,13 +425,14 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, l
     return None
 
 
-def validate(td, logger):
+def validate(td, name, logger):
     files = recursively_get_files(td.name, ['cnf'])
-
+    time = 0
     for file in files:
         res = cadical_fn(file, gpu = True)
-        logger.write_log(res)
-        print(res)
+        time += res['cpu_time']
+    logger.write_log(f'name: {name}, time: {time/len(files)}')
+    print(f'name: {name}, time: {time/len(files)}')
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
@@ -567,7 +571,7 @@ class Learner:
     def data_loader(self):
         yield ray.get(self.buf.get_sp_batch.remote(self.batch_size))
 
-    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs):
+    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs, name):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
         self.logger.write_log(f"G: {G.size()}")
@@ -594,7 +598,7 @@ class Learner:
         #     lr = self.lr)
         # stats = train_step(graphsage, self.model, self.optim, self.batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs,
         #                    advs, device = self.device)
-        train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, self.logger, device = self.device)
+        train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, name, self.logger, device = self.device)
         # return stats.get('p_loss') + stats.get('v_loss')
         return None
 
@@ -698,7 +702,7 @@ def _parse_main():
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
     parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 1)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
-    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 15, type = int)
+    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 1, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
     parser.add_argument("--sp-cfg", dest = "sp_cfg", action = "store", default = None)
 

@@ -6,9 +6,9 @@ import numpy as np
 import tempfile
 import os
 
-from solver import *
-from config import TORCHSCRIPT_MODEL_PATH
-from deploy_model import *
+from python.solver import *
+from python.config import TORCHSCRIPT_MODEL_PATH
+from python.deploy_model import *
 
 SVCOMP_PATH = ""
 SATCOMP18_PATH = ""
