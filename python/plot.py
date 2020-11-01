@@ -1,3 +1,5 @@
+from mpl_toolkits.axes_grid1 import host_subplot
+import mpl_toolkits.axisartist as AA
 import matplotlib.pyplot as plt
 import sys
 import json
@@ -68,14 +70,27 @@ def plot_pic(model_result, pure_result):
     x = [item for item in model_result]
     y1 = [model_result[item] for item in x]
     y2 = [pure_result[item] for item in x]
-    y1_axis = 
+    host = host_subplot(111, axes_class = AA.Axes)
+    plt.subplots_adjust(right = 0.75)
+    host.set_xlim(0, len(x))
+    host.set_ylim(0, max(y1))
+    par1 = host.twinx()
+    par1.axis["right"].toggle(all = True)
+    par1.set_ylim(0, max(y2))
+    host.set_xlabel("CNF")
+    host.set_ylabel("model-real-time")
+    par1.set_ylabel("pure-solver-real-time")
+    host.legend()
+    p1, = host.plot(x, y1, label = "model-real-time")
+    p2, = host.plot(x, y1, label = "pure-solver-real-time")
+
+    host.axis["left"].label.set_color(p1.get_color())
+    par1.axis["right"].label.set_color(p2.get_color())
+
     print(x, y1, y2)
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    ax.plot(y1, y1, '-', label = 'Swdown')
-    ax.plot(y2, y2, '-', label = 'Rn')
 
-
+    plt.draw()
+    plt.show()
 
 
 if __name__ == '__main__':
