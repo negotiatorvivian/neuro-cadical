@@ -9,6 +9,7 @@ from collections import defaultdict
 from python.util import files_with_extension
 from python.config import SATENV_PATH
 
+
 def get_latest_from_index(ckpt_dir):
     index = files_with_extension(ckpt_dir, "index")[0]
     with open(index, "r") as f:
@@ -39,7 +40,7 @@ def parse_log(logpath):
             line.replace(' ', '')
             line = line.split(':')
             if line[0] == 'name':
-                name = line[1].split(',')[0]
+                name = line[1].split(',')[0].strip()
                 res_dict[name] = float(line[2])
                 frequency[name] += 1
     for item in res_dict:
@@ -72,22 +73,20 @@ def plot_pic(model_result, pure_result):
     y2 = [pure_result[item] for item in x]
     host = host_subplot(111, axes_class = AA.Axes)
     plt.subplots_adjust(right = 0.75)
-    host.set_xlim(0, len(x))
-    host.set_ylim(0, max(y1))
+    host.set_xlim(1, len(x))
+    host.set_ylim(min(y1), max(y1))
     par1 = host.twinx()
     par1.axis["right"].toggle(all = True)
-    par1.set_ylim(0, max(y2))
+    par1.set_ylim(min(y2), max(y2))
     host.set_xlabel("CNF")
     host.set_ylabel("model-real-time")
     par1.set_ylabel("pure-solver-real-time")
-    host.legend()
-    p1, = host.plot(x, y1, label = "model-real-time")
-    p2, = host.plot(x, y1, label = "pure-solver-real-time")
 
+    p1, = host.plot([i + 1 for i in range(len(x))], y1, label = "model-real-time")
+    p2, = par1.plot([i + 1 for i in range(len(x))], y2, label = "pure-solver-real-time")
+    host.legend()
     host.axis["left"].label.set_color(p1.get_color())
     par1.axis["right"].label.set_color(p2.get_color())
-
-    print(x, y1, y2)
 
     plt.draw()
     plt.show()
@@ -102,7 +101,7 @@ if __name__ == '__main__':
     # subprocess.run(command, stdout = subprocess.PIPE)
     pure_result_path = os.path.join(os.path.dirname(logpath), 'pure-results.txt')
     pure_result = parse_pure_file(pure_result_path)
-    print(pure_result)
+    # print(f'pure_result: {pure_result}, model_result: {model_result}')
     plot_pic(model_result, pure_result)
 
 
