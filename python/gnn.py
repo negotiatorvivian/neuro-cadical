@@ -327,7 +327,6 @@ class Base(base.FactorGraphTrainerBase):
 
             for model in self.model_list:
                 base._module(model)._global_step += 1
-        return self.temp_dir
 
     def train_batch(self, total_loss, optimizer, graph_map, batch_variable_map, batch_function_map, edge_feature,
                     graph_feat, label, G, actions):
@@ -384,13 +383,57 @@ class Base(base.FactorGraphTrainerBase):
 
             for s in state:
                 del s
-            self._update_solution(prediction, model.sat_problem, actions)
 
         optimizer.step()
 
-    # def forward(self, G, data):
-    #     for data_item in self.transform_data(data):
-    #         p_logits, v_pre_logits = self.train_sp(G, data_item)
+    def predict(self, G, actions, *train_data):
+        with torch.no_grad():
+
+            for (j, data) in enumerate(train_data, 1):
+                segment_num = len(data[0])
+
+                for i in range(segment_num):
+
+                    (graph_map, batch_variable_map, batch_function_map,
+                    edge_feature, graph_feat, label, misc_data) = [self._to_cuda(d[i]) for d in data]
+                    self.predict_batch(graph_map, batch_variable_map, batch_function_map,
+                                        edge_feature, graph_feat, label, misc_data, actions, None, batch_replication = 1)
+
+                    del graph_map
+                    del batch_variable_map
+                    del batch_function_map
+                    del edge_feature
+                    del graph_feat
+                    del label
+
+        return self.temp_dir
+
+    def predict_batch(self, graph_map, batch_variable_map, batch_function_map,
+        edge_feature, graph_feat, label, misc_data, actions, post_processor, batch_replication = 1):
+        edge_num = graph_map.size(1)
+
+        for (i, model) in enumerate(self.model_list[:-1]):
+
+            state = _module(model).get_init_state(graph_map, batch_variable_map, batch_function_map,
+                                                  edge_feature, graph_feat, randomized = False, batch_replication = batch_replication)
+
+            prediction, _ = model(
+                init_state = state, graph_map = graph_map, batch_variable_map = batch_variable_map,
+                batch_function_map = batch_function_map, edge_feature = edge_feature,
+                meta_data = graph_feat, is_training = False, iteration_num = self.config['test_recurrence_num'],
+                check_termination = self._check_recurrence_termination, batch_replication = batch_replication)
+
+            if post_processor is not None and callable(post_processor):
+                message = post_processor(_module(model), prediction, graph_map,
+                                         batch_variable_map, batch_function_map, edge_feature, graph_feat, label, misc_data)
+                print(message)
+
+            for p in prediction:
+                del p
+
+            for s in state:
+                del s
+            self._update_solution(prediction, model.sat_problem, actions)
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
                       edge_feature, meta_data):
@@ -471,9 +514,9 @@ class Base(base.FactorGraphTrainerBase):
     def _update_solution(self, prediction, sat_problem, actions):
         if prediction[0] is None:
             return
-        actions = list(itertools.chain.from_iterable(actions))
-        print(f'actions: {actions}')
-        sat_problem._solution[actions] = prediction[0].squeeze()[actions]
+        actions = np.array(list(itertools.chain.from_iterable(actions)))
+        print(f'actions: {list(actions)}')
+        sat_problem._solution[actions - 1] = prediction[0].squeeze()[actions - 1]
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         assignment = sat_problem._solution * sat_problem._active_variables
@@ -485,7 +528,7 @@ class Base(base.FactorGraphTrainerBase):
         indices = np.argwhere(deactivated_functions[:, 0] == 1)
         sat_problem._active_functions[indices, 0] = 0
         print(f'all clauses: {deactivated_functions.shape}, removed clauses： {indices.shape}')
-        sat_problem._active_variables[actions] = 0
+        sat_problem._active_variables[actions - 1] = 0
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
                                              np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
         deactivated_sat = torch.index_select(deactivated_sat, 1,

@@ -69,6 +69,7 @@ def parse_pure_file(file_path):
 
 def plot_pic(model_result, pure_result):
     x = [item for item in model_result]
+    print(f'x: {x}, length: {len(x)}')
     y1 = [model_result[item] for item in x]
     y2 = [pure_result[item] for item in x]
     host = host_subplot(111, axes_class = AA.Axes)

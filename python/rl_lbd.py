@@ -65,7 +65,7 @@ def softmax_all_from_logits(logits, length):
     return torch.multinomial(probs, length).cpu().numpy()
 
 
-def sample_trajectory(agent, env, cnf, logger):
+def sample_trajectory(agent, env, cnf, is_train, logger):
     """
     Samples a trajectory from the environment and then resets it. This assumes the environment has been initialized.
     """
@@ -81,27 +81,41 @@ def sample_trajectory(agent, env, cnf, logger):
     CL_idxs = env.render()
     terminal_flag = False
     data = cnf_to_data(cnfs)
-    active_variables = np.ones(CL_idxs.n_vars, dtype = int)
-    prediction, _ = agent.predict(data)
-    print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
-
-    while not terminal_flag:
-        G = mk_G(CL_idxs)
-        mu_logits, value_estimate = agent.act(G)
-        action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
-        actions.append(action)
-        new_prediction = prediction[np.argwhere(active_variables > 0)]
-        active_variables[np.array(actions) - 1] = 0
-        # CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
-        value = 1 if new_prediction[action - 1] > 0.5 else -1
-        CL_idxs, reward, terminal_flag = env.step(value * action)
-        Gs.append(G)
-        if not terminal_flag:
-            print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}')
-        mu_logitss.append(mu_logits)
-        rewards.append(reward)
-        value_estimates.append(value_estimate)
-        # cnfs.append(cnf)
+    if not is_train:
+        active_variables = np.ones(CL_idxs.n_vars, dtype = int)
+        prediction, _ = agent.predict(data)
+        print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
+        while not terminal_flag:
+            G = mk_G(CL_idxs)
+            mu_logits, value_estimate = agent.act(G)
+            action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
+            actions.append(action)
+            new_prediction = prediction[np.argwhere(active_variables > 0)]
+            active_variables[np.array(actions) - 1] = 0
+            # CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
+            value = 1 if new_prediction[action - 1] > 0.5 else -1
+            CL_idxs, reward, terminal_flag = env.step(value * action)
+            Gs.append(G)
+            if not terminal_flag:
+                print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}')
+            mu_logitss.append(mu_logits)
+            rewards.append(reward)
+            value_estimates.append(value_estimate)
+            # cnfs.append(cnf)
+    else:
+        while not terminal_flag:
+            G = mk_G(CL_idxs)
+            mu_logits, value_estimate = agent.act(G)
+            action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
+            actions.append(action)
+            CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
+            Gs.append(G)
+            if not terminal_flag:
+                print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}')
+            mu_logitss.append(mu_logits)
+            rewards.append(reward)
+            value_estimates.append(value_estimate)
+            # cnfs.append(cnf)
     # logger.write_log(f"actions: {actions}, rewards: {rewards}, value_estimate: {value_estimates}")
     env.reset()
     return Gs, mu_logitss, actions, rewards, value_estimates, cnfs, name
@@ -222,8 +236,8 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
                 print("BAD CNF:", from_file)
                 raise e  # else:  #     raise Exception("must set env with CNF or file")
 
-    def sample_trajectory(self):
-        tau = sample_trajectory(self.agent, self.env, self.cnf, self.logger)
+    def sample_trajectory(self, is_train = True):
+        tau = sample_trajectory(self.agent, self.env, self.cnf, is_train, self.logger)
         self.buf.ingest_trajectory.remote(process_trajectory(*tau))
         print(f"SAMPLED TRAJECTORY OF LENGTH {len(tau[0])}")
         self.trajectory_count += 1
@@ -383,11 +397,9 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, n
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
-        tempdir = model.train(G, actions, data)
+        model.train(G, actions, data)
         # logger.write_log(f'cnf: {cnfs[0].id}, actions: {actions}')
         # print(f'cnf: {cnfs[0].id}, length: {len(cnfs)}, actions: {actions}')
-        validate(tempdir, name, logger)
-
         # policy_logitss = batcher.unbatch(pre_policy_logitss, mode = "variable")
         # actions = torch.as_tensor(np.array(actions, dtype = "int32")).to(device)
         # advs = torch.as_tensor(np.array(advs, dtype = "float32")).to(device).clone()
@@ -425,7 +437,22 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, n
     return None
 
 
-def validate(td, name, logger):
+def predict_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, name, logger,
+                device = torch.device("cpu")):
+    for data in model.transform_data(cnfs):
+
+        agg_loss = None
+        if graphsage is not None:
+            agg_loss = graphsage.loss(nodes, labels)
+        tempdir = model.predict(G, actions, data)
+        # logger.write_log(f'cnf: {cnfs[0].id}, actions: {actions}')
+        # print(f'cnf: {cnfs[0].id}, length: {len(cnfs)}, actions: {actions}')
+        validate_answers(tempdir, name, logger)
+
+    return None
+
+
+def validate_answers(td, name, logger):
     files = recursively_get_files(td.name, ['cnf'])
     time = 0
     for file in files:
@@ -477,8 +504,9 @@ class WeightManager:
         return ckpt
 
     def load_ckpt(self, ckpt):
-        self.model_state_dict1 = json.loads(ckpt["model_state_dict1"])
-        self.model_state_dict2 = json.loads(ckpt["model_state_dict2"])
+        # print(ckpt)
+        self.model_state_dict1 = ckpt["model_state_dict1"]
+        self.model_state_dict2 = ckpt["model_state_dict2"]
         self.optim_state_dict = ckpt["optim_state_dict"]
         self.save_counter = ckpt["save_counter"]
         self.GLOBAL_STEP_COUNT = ckpt["GLOBAL_STEP_COUNT"]
@@ -526,14 +554,13 @@ class WeightManager:
             "optim_state_dict": optim_state_dict, "save_counter": save_counter, "GLOBAL_STEP_COUNT": GLOBAL_STEP_COUNT,
             "episode_count": episode_count
         }, ckpt_path)
-        self.update_index(
-            ckpt_path)  # print(f"SAVED CHECKPOINT TO ckpt_{name}.pth")  # print(f"GLOBAL_STEP_COUNT: {GLOBAL_STEP_COUNT}\nEPISODE_COUNT: {episode_count}")
+        self.update_index(ckpt_path)
 
 
 # let's try single-GPU training for now
 class Learner:
     def __init__(self, encode_dim, feature_dim, num_samples, buf, weight_manager, batch_size, log_dir, ckpt_dir,
-                 ckpt_freq, lr, sp_config, restore = True, model_cfg = defaultGNN1Cfg):
+                 ckpt_freq, lr, sp_config, restore, model_cfg = defaultGNN1Cfg):
         self.encode_dim = encode_dim
         self.feature_dim = feature_dim
         self.num_samples = num_samples
@@ -561,6 +588,7 @@ class Learner:
         if restore:
             ckpt = ray.get(self.weight_manager.load_latest_ckpt.remote())
             if ckpt is not None:
+                print('load ckpt')
                 self.set_weights(ckpt)
 
     def write_stats(self, stats):
@@ -575,7 +603,7 @@ class Learner:
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
         self.logger.write_log(f"G: {G.size()}")
-        print(f"G: {G.size()}")
+        # print(f"G: {G.size()}")
 
         # x_dim = G.size()[0]
         # y_dim = G.size()[1]
@@ -602,6 +630,12 @@ class Learner:
         # return stats.get('p_loss') + stats.get('v_loss')
         return None
 
+    def predict_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs, name):
+        batch_size = len(Gs)
+        G, clause_values = self.batcher.batch(Gs)
+        predict_batch(self.model, G, batch_size, None, None, None, actions, cnfs, name, self.logger, device = self.device)
+        return None
+
     def sync_weights(self, w):
         w.set_weights.remote(self.get_weights())
         print(f"SYNCED WEIGHTS TO WORKER {w}")
@@ -622,7 +656,7 @@ class Learner:
         # models = [model.state_dict() for model in self.model.model_list]
         # model_names = [model._name for model in self.model.model_list]
         # model_state = dict(zip(model_names, models))
-        self.weight_manager.save_ckpt.remote(self.model.model_list[0], self.model.model_list[1],
+        self.weight_manager.save_ckpt.remote(self.model.model_list[0].state_dict(), self.model.model_list[1].state_dict(),
                                              self.optim.state_dict(), self.save_counter + 1, self.GLOBAL_STEP_COUNT,
                                              episode_count = episode_count, name = name)
         self.save_counter += 1
@@ -678,20 +712,15 @@ class Learner:
                 self.save_ckpt(False)
 
     def predict(self):
-        Gs, mu_logitss, actions, gs, advs = ray.get(self.buf.get_batch.remote(self.batch_size))
-        batch_size = len(Gs)
-        i = 0
-        while i < batch_size:
-            G, clause_values = self.batcher.batch(Gs)
-            predict_step(self.model, self.batcher, G, batch_size, None, None, None, self.device)
-            i += 1
+        batch = ray.get(self.buf.get_batch.remote(self.batch_size))
+        self.predict_batch(*batch)
 
 
 def _parse_main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-workers", dest = "n_workers", action = "store", default = 1, type = int)
-    parser.add_argument("--n-epochs", dest = "n_epochs", action = "store", default = 10, type = int)
+    parser.add_argument("--n-epochs", dest = "n_epochs", action = "store", default = 100, type = int)
     parser.add_argument("--num-samples", dest = "num_samples", action = "store", default = 5, type = int)
     parser.add_argument("--encode-dim", dest = "encode_dim", action = "store", default = 128, type = int)
     parser.add_argument("--feature-dim", dest = "feature_dim", action = "store", default = 2, type = int)
@@ -702,7 +731,7 @@ def _parse_main():
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
     parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 1)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
-    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 1, type = int)
+    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 10, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
     parser.add_argument("--sp-cfg", dest = "sp_cfg", action = "store", default = None)
 
@@ -765,8 +794,9 @@ def _main(is_train = True):
     for k_epoch in range(opts.n_epochs):
         waiting = 0
         completed = 0
+        print(f'---- epoch: {k_epoch} ----------')
         shuffle_environments(workers)
-        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote()),
+        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(is_train)),
                                     range(opts.eps_per_worker * opts.n_workers)):
             pass
 
@@ -777,4 +807,4 @@ def _main(is_train = True):
 
 
 if __name__ == "__main__":
-    _main(True)
+    _main(False)
