@@ -8,6 +8,7 @@ import scipy.signal
 from pysat.formula import CNF
 import time
 import os
+import shutil
 import yaml
 import json
 import ray
@@ -89,7 +90,8 @@ def sample_trajectory(agent, env, cnf, is_train, length = 15):
             # print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
             G = mk_G(CL_idxs)
             mu_logits, value_estimate = agent.act(G)
-            action = list(softmax_all_from_logits(mu_logits, length) + 1)  # torch multinomial zero-indexes
+            sample_length = random.randint(3, length)
+            action = list(softmax_all_from_logits(mu_logits, sample_length) + 1)  # torch multinomial zero-indexes
             actions.append(action)
             # new_prediction = prediction[np.argwhere(active_variables > 0)]
             # active_variables[np.array(actions) - 1] = 0
@@ -216,7 +218,6 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             # from_cnf.to_file(cnf_path)
             try:
                 # self.env = SatEnv(cnf_path)
-                print(f'name: {paths[-1]}')
                 self.cnf = CNF(from_file = from_cnf, id = paths[-1])
             except RuntimeError as e:
                 print("BAD CNF:", from_cnf)
@@ -314,7 +315,7 @@ class ReplayBuffer:
                 gs.append(g)
                 advs.append(adv)
                 cnfs.append(cnf)
-                self.logger.write_log(f'get batch: {len(action)}, action:{action}, g:{g}, adv:{adv}')
+                self.logger.write_log(f'get batch: {len(action[0])}, action:{action}, g:{g}, adv:{adv}')
             return Gs, mu_logitss, actions, gs, advs, cnfs, names
 
 
@@ -434,17 +435,18 @@ def predict_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
     return None
 
 
-def validate_answers(td, names, logger):
-    files = recursively_get_files(td.name, ['cnf'])
-    print(f'files: {files}')
-    time = 0
-    results = []
-    for file in files:
-        res = cadical_fn(file, gpu = True)
-        time += res['cpu_time']
-        results.append(res["result"])
-    logger.write_log(f'name: {names}, time: {time/len(files)}, result: {results}')
-    print(f'name: {names}, time: {time/len(files)}')
+def validate_answers(tds, names, logger):
+    for td in tds:
+        files = recursively_get_files(td.name, ['cnf'])
+        print(f'files: {files}')
+        time = 0
+        results = []
+        for file in files:
+            res = cadical_fn(file, gpu = True)
+            time += res['cpu_time']
+            results.append(res["result"])
+        logger.write_log(f'name: {names}, time: {time/len(files)}, result: {results}')
+        print(f'name: {names}, time: {time/len(files)}')
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
@@ -697,14 +699,13 @@ class Learner:
                 self.save_ckpt(False)
 
     def predict(self):
-        while True:
-            if ray.get(self.buf.batch_ready.remote(self.batch_size)):
-                pass
-            start = time.time()
-            batch = ray.get(self.buf.get_batch.remote(self.batch_size))
-            self.predict_batch(*batch)
-            del batch
-            self.logger.write_log(f'total_time: {time.time() - start}')
+        if ray.get(self.buf.batch_ready.remote(self.batch_size)):
+            pass
+        start = time.time()
+        batch = ray.get(self.buf.get_batch.remote(self.batch_size))
+        self.predict_batch(*batch)
+        del batch
+        self.logger.write_log(f'total_time: {time.time() - start}')
 
 
 def _parse_main():
@@ -799,16 +800,16 @@ def _main(is_train = True):
             shuffle_environments(workers)
         else:
             predict_environments(workers)
-    if is_train:
-        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
-                                    range(opts.eps_per_worker * opts.n_workers)):
-            pass
-        ray.get(learner.train.remote(step_limit = 5000, synchronous = True))
-    else:
-        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
-                                    range(opts.eps_per_worker * opts.n_workers)):
-            pass
-        ray.get(learner.predict.remote())
+        if is_train:
+            for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
+                                        range(opts.eps_per_worker * opts.n_workers)):
+                pass
+            ray.get(learner.train.remote(step_limit = 5000, synchronous = True))
+        else:
+            for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
+                                        range(opts.eps_per_worker * opts.n_workers)):
+                pass
+            ray.get(learner.predict.remote())
 
 
 if __name__ == "__main__":

@@ -247,7 +247,7 @@ class Base(base.FactorGraphTrainerBase):
         self.model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
-        self.temp_dir = tempfile.TemporaryDirectory()
+        # self.temp_dir = tempfile.TemporaryDirectory()
 
     def transform_data(self, data):
         # graph_map, batch_variable_map, batch_function_map,edge_feature, graph_feat, label
@@ -387,6 +387,7 @@ class Base(base.FactorGraphTrainerBase):
         optimizer.step()
 
     def predict(self, G, actions, *train_data):
+        paths = []
         with torch.no_grad():
 
             for (j, data) in enumerate(train_data, 1):
@@ -396,9 +397,9 @@ class Base(base.FactorGraphTrainerBase):
 
                     (graph_map, batch_variable_map, batch_function_map,
                     edge_feature, graph_feat, label, misc_data) = [self._to_cuda(d[i]) for d in data]
-                    self.predict_batch(graph_map, batch_variable_map, batch_function_map,
+                    path = self.predict_batch(graph_map, batch_variable_map, batch_function_map,
                                         edge_feature, graph_feat, label, misc_data, actions, None, batch_replication = 1)
-
+                    paths.append(path)
                     del graph_map
                     del batch_variable_map
                     del batch_function_map
@@ -406,7 +407,7 @@ class Base(base.FactorGraphTrainerBase):
                     del graph_feat
                     del label
 
-        return self.temp_dir
+        return paths
 
     def predict_batch(self, graph_map, batch_variable_map, batch_function_map,
         edge_feature, graph_feat, label, misc_data, actions, post_processor, batch_replication = 1):
@@ -435,8 +436,13 @@ class Base(base.FactorGraphTrainerBase):
                 del s
             actions = list(np.array(actions).squeeze())
             print(f'all actions: {actions}')
-            for action in actions:
-                self._update_solution(prediction, model.sat_problem, action)
+            temp_dir = tempfile.TemporaryDirectory()
+            if isinstance(actions[0], int):
+                self._update_solution(prediction, model.sat_problem, np.array(actions), temp_dir)
+            else:
+                for action in actions:
+                    self._update_solution(prediction, model.sat_problem, action, temp_dir)
+            return temp_dir
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
                       edge_feature, meta_data):
@@ -514,10 +520,10 @@ class Base(base.FactorGraphTrainerBase):
 
         return model_list
 
-    def _update_solution(self, prediction, sat_problem, actions):
+    def _update_solution(self, prediction, sat_problem, actions, temp_dir):
         if prediction[0] is None:
             return
-        print(f'actions: {list(actions)}')
+        print(f'actions: {actions}')
         solution = sat_problem._solution.clone()
         active_variables = sat_problem._active_variables.clone()
         active_functions = sat_problem._active_functions.clone()
@@ -537,7 +543,7 @@ class Base(base.FactorGraphTrainerBase):
                                              np.argwhere(active_functions == 1).squeeze()[0])
         deactivated_sat = torch.index_select(deactivated_sat, 1,
                                              np.argwhere(active_variables == 1).squeeze()[0])
-        data_to_cnf(deactivated_sat, self.temp_dir)
+        data_to_cnf(deactivated_sat, temp_dir)
 
     def validate(self, train_data, batch_replication = 1):
         predictions = []
