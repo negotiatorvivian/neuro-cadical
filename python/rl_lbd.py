@@ -80,7 +80,7 @@ def sample_trajectory(agent, env, cnf, is_train, length = 15):
 
     CL_idxs = env.render()
     terminal_flag = False
-    try_times = 5
+    try_times = 1
     # data = cnf_to_data(cnfs)
     if not is_train:
         while try_times > 0:
@@ -135,14 +135,6 @@ def cnf_to_data(cnfs):
         results.append((n_vars, n_cls, indices, edge_features, answers, float(result), []))
     # return torch.sparse.FloatTensor(indices = indices, values = torch.from_numpy(edge_features), size = size)
     return results
-
-
-def cl_idx_to_data(CL_idxs, action, answers):
-    n_vars = CL_idxs.n_vars
-    n_cls = CL_idxs.n_clauses
-    indices = torch.stack([torch.from_numpy(CL_idxs.L_idxs).type(torch.long), torch.from_numpy(CL_idxs.C_idxs).type(torch.long)])
-    temp_ans = np.array(answers)[action] = 0
-    temp_ans = temp_ans[temp_ans != 0]
 
 
 def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, name, last_val = 0, gam = 1.0, lam = 1.0):
@@ -324,25 +316,6 @@ class ReplayBuffer:
                 cnfs.append(cnf)
                 self.logger.write_log(f'get batch: {len(action)}, action:{action}, g:{g}, adv:{adv}')
             return Gs, mu_logitss, actions, gs, advs, cnfs, names
-
-    def get_sp_batch(self, batch_size):
-        Gs = []
-        mu_logitss = []
-        actions = []
-        gs = []
-        advs = []
-        cnfs = []
-
-        for _ in range(batch_size):
-            G, mu_logits, action, g, adv, cnf, name = self.queue.get()
-            Gs.append(G)
-            actions.append(action)
-            # mu_logitss.append(mu_logits)
-            # gs.append(g)
-            # advs.append(adv)
-            cnfs.append(cnf)
-            self.logger.write_log(f'get batch: action:{action}')
-        return Gs, mu_logitss, actions, gs, advs, cnfs, name
 
 
 def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, mu_logitss, actions, gs, advs, cnfs,
@@ -813,8 +786,9 @@ def _main(is_train = True):
 
     def predict_environments(ws):
         for w in ws:
-            for i in range(len(files)):
-                ray.get(w.set_env.remote(from_file = files[i]))
+            ray.get(w.set_env.remote(from_file = random.choice(files)))
+            # for i in range(len(files)):
+            #     ray.get(w.set_env.remote(from_file = files[i]))
 
     for k_epoch in range(opts.n_epochs):
         waiting = 0
