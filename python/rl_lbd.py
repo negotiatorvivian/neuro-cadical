@@ -65,7 +65,7 @@ def softmax_all_from_logits(logits, length):
     return torch.multinomial(probs, length).cpu().numpy()
 
 
-def sample_trajectory(agent, env, cnf, is_train, logger):
+def sample_trajectory(agent, env, cnf, is_train, length = 15):
     """
     Samples a trajectory from the environment and then resets it. This assumes the environment has been initialized.
     """
@@ -80,28 +80,26 @@ def sample_trajectory(agent, env, cnf, is_train, logger):
 
     CL_idxs = env.render()
     terminal_flag = False
-    data = cnf_to_data(cnfs)
+    try_times = 5
+    # data = cnf_to_data(cnfs)
     if not is_train:
-        active_variables = np.ones(CL_idxs.n_vars, dtype = int)
-        prediction, _ = agent.predict(data)
-        print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
-        while not terminal_flag:
+        while try_times > 0:
+            # active_variables = np.ones(CL_idxs.n_vars, dtype = int)
+            # prediction, _ = agent.predict(data)
+            # print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
             G = mk_G(CL_idxs)
             mu_logits, value_estimate = agent.act(G)
-            action = (softmax_sample_from_logits(mu_logits) + 1)  # torch multinomial zero-indexes
+            action = list(softmax_all_from_logits(mu_logits, length) + 1)  # torch multinomial zero-indexes
             actions.append(action)
-            new_prediction = prediction[np.argwhere(active_variables > 0)]
-            active_variables[np.array(actions) - 1] = 0
+            # new_prediction = prediction[np.argwhere(active_variables > 0)]
+            # active_variables[np.array(actions) - 1] = 0
             # CL_idxs, reward, terminal_flag = env.step((np.random.choice([1, -1])) * action)
-            value = 1 if new_prediction[action - 1] > 0.5 else -1
-            CL_idxs, reward, terminal_flag = env.step(value * action)
             Gs.append(G)
             if not terminal_flag:
-                print(f'{G.size()}， C_idxs： {max(CL_idxs.C_idxs), max(CL_idxs.L_idxs)}')
+                print(f'{G.size()}， actions： {actions}')
             mu_logitss.append(mu_logits)
-            rewards.append(reward)
             value_estimates.append(value_estimate)
-            # cnfs.append(cnf)
+            try_times -= 1
     else:
         while not terminal_flag:
             G = mk_G(CL_idxs)
@@ -148,6 +146,8 @@ def cl_idx_to_data(CL_idxs, action, answers):
 
 
 def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, name, last_val = 0, gam = 1.0, lam = 1.0):
+    if len(rewards) == 0:
+        rewards = np.ones(len(Gs))
     gs = discount_cumsum(rewards, int(gam))
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
                                                                                        :-1]  # future advantage
@@ -224,20 +224,22 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
             # from_cnf.to_file(cnf_path)
             try:
                 # self.env = SatEnv(cnf_path)
+                print(f'name: {paths[-1]}')
                 self.cnf = CNF(from_file = from_cnf, id = paths[-1])
             except RuntimeError as e:
                 print("BAD CNF:", from_cnf)
                 raise e
         if from_file is not None:
             try:
+                print(f'from_file: {from_file}')
                 self.env = SatEnv(from_file)
 
             except RuntimeError as e:
                 print("BAD CNF:", from_file)
                 raise e  # else:  #     raise Exception("must set env with CNF or file")
 
-    def sample_trajectory(self, is_train = True):
-        tau = sample_trajectory(self.agent, self.env, self.cnf, is_train, self.logger)
+    def sample_trajectory(self, length, is_train = True):
+        tau = sample_trajectory(self.agent, self.env, self.cnf, is_train, length = length)
         self.buf.ingest_trajectory.remote(process_trajectory(*tau))
         print(f"SAMPLED TRAJECTORY OF LENGTH {len(tau[0])}")
         self.trajectory_count += 1
@@ -293,6 +295,12 @@ class ReplayBuffer:
     def batch_ready(self, batch_size):
         return batch_size <= self.queue.qsize()
 
+    def is_empty(self):
+        return self.queue.empty()
+
+    def get_len(self):
+        return self.queue.empty()
+
     def get_batch(self, batch_size, sample_randomly = False):
         if sample_randomly:
             raise Exception("unsupported")
@@ -303,17 +311,19 @@ class ReplayBuffer:
             gs = []
             advs = []
             cnfs = []
+            names = []
 
             for _ in range(batch_size):
                 G, mu_logits, action, g, adv, cnf, name = self.queue.get()
                 Gs.append(G)
                 mu_logitss.append(mu_logits)
                 actions.append(action)
+                names.append(name)
                 gs.append(g)
                 advs.append(adv)
                 cnfs.append(cnf)
-                self.logger.write_log(f'get batch: action:{action}, g:{g}, adv:{adv}')
-            return Gs, mu_logitss, actions, gs, advs, cnfs, name
+                self.logger.write_log(f'get batch: {len(action)}, action:{action}, g:{g}, adv:{adv}')
+            return Gs, mu_logitss, actions, gs, advs, cnfs, names
 
     def get_sp_batch(self, batch_size):
         Gs = []
@@ -390,7 +400,7 @@ def train_step(model, optim, batcher, G, batch_size, graphsage, nodes, labels, m
     return {"p_loss": p_loss.detach().cpu().numpy(), "v_loss": v_loss.detach().cpu().numpy()}
 
 
-def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, name, logger,
+def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, names, logger,
                 device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
 
@@ -437,29 +447,31 @@ def train_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, n
     return None
 
 
-def predict_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, name, logger,
+def predict_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs, names, logger,
                 device = torch.device("cpu")):
     for data in model.transform_data(cnfs):
-
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
         tempdir = model.predict(G, actions, data)
         # logger.write_log(f'cnf: {cnfs[0].id}, actions: {actions}')
         # print(f'cnf: {cnfs[0].id}, length: {len(cnfs)}, actions: {actions}')
-        validate_answers(tempdir, name, logger)
+        validate_answers(tempdir, names, logger)
 
     return None
 
 
-def validate_answers(td, name, logger):
+def validate_answers(td, names, logger):
     files = recursively_get_files(td.name, ['cnf'])
+    print(f'files: {files}')
     time = 0
+    results = []
     for file in files:
         res = cadical_fn(file, gpu = True)
         time += res['cpu_time']
-    logger.write_log(f'name: {name}, time: {time/len(files)}')
-    print(f'name: {name}, time: {time/len(files)}')
+        results.append(res["result"])
+    logger.write_log(f'name: {names}, time: {time/len(files)}, result: {results}')
+    print(f'name: {names}, time: {time/len(files)}')
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
@@ -599,7 +611,7 @@ class Learner:
     def data_loader(self):
         yield ray.get(self.buf.get_sp_batch.remote(self.batch_size))
 
-    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs, name):
+    def train_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs, names):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
         self.logger.write_log(f"G: {G.size()}")
@@ -626,14 +638,14 @@ class Learner:
         #     lr = self.lr)
         # stats = train_step(graphsage, self.model, self.optim, self.batcher, G, batch_size, nodes, labels, mu_logitss, actions, gs,
         #                    advs, device = self.device)
-        train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, name, self.logger, device = self.device)
+        train_batch(self.model, G, batch_size, None, None, None, actions, cnfs, names, self.logger, device = self.device)
         # return stats.get('p_loss') + stats.get('v_loss')
         return None
 
-    def predict_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs, name):
+    def predict_batch(self, Gs, mu_logitss, actions, gs, advs, cnfs, names):
         batch_size = len(Gs)
         G, clause_values = self.batcher.batch(Gs)
-        predict_batch(self.model, G, batch_size, None, None, None, actions, cnfs, name, self.logger, device = self.device)
+        predict_batch(self.model, G, batch_size, None, None, None, actions, cnfs, names, self.logger, device = self.device)
         return None
 
     def sync_weights(self, w):
@@ -712,8 +724,14 @@ class Learner:
                 self.save_ckpt(False)
 
     def predict(self):
-        batch = ray.get(self.buf.get_batch.remote(self.batch_size))
-        self.predict_batch(*batch)
+        while True:
+            if ray.get(self.buf.batch_ready.remote(self.batch_size)):
+                pass
+            start = time.time()
+            batch = ray.get(self.buf.get_batch.remote(self.batch_size))
+            self.predict_batch(*batch)
+            del batch
+            self.logger.write_log(f'total_time: {time.time() - start}')
 
 
 def _parse_main():
@@ -724,6 +742,7 @@ def _parse_main():
     parser.add_argument("--num-samples", dest = "num_samples", action = "store", default = 5, type = int)
     parser.add_argument("--encode-dim", dest = "encode_dim", action = "store", default = 128, type = int)
     parser.add_argument("--feature-dim", dest = "feature_dim", action = "store", default = 2, type = int)
+    parser.add_argument("--length", dest = "length", action = "store", default = 10, type = int)
     parser.add_argument("--cnfs", dest = "cnfs", action = "store")
     parser.add_argument("--time-limit", dest = "time_limit", action = "store", type = float)
     parser.add_argument("--lr", dest = "lr", type = float, action = "store", default = 1e-4)
@@ -790,19 +809,31 @@ def _main(is_train = True):
     def shuffle_environments(ws):
         for w in ws:
             ray.get(w.set_env.remote(from_file = random.choice(files)))
+            # ray.get(w.set_env.remote(from_file = files[0]))
+
+    def predict_environments(ws):
+        for w in ws:
+            for i in range(len(files)):
+                ray.get(w.set_env.remote(from_file = files[i]))
 
     for k_epoch in range(opts.n_epochs):
         waiting = 0
         completed = 0
         print(f'---- epoch: {k_epoch} ----------')
-        shuffle_environments(workers)
-        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(is_train)),
+
+        if is_train:
+            shuffle_environments(workers)
+        else:
+            predict_environments(workers)
+    if is_train:
+        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
                                     range(opts.eps_per_worker * opts.n_workers)):
             pass
-
-    if is_train:
         ray.get(learner.train.remote(step_limit = 5000, synchronous = True))
     else:
+        for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
+                                    range(opts.eps_per_worker * opts.n_workers)):
+            pass
         ray.get(learner.predict.remote())
 
 

@@ -433,7 +433,10 @@ class Base(base.FactorGraphTrainerBase):
 
             for s in state:
                 del s
-            self._update_solution(prediction, model.sat_problem, actions)
+            actions = list(np.array(actions).squeeze())
+            print(f'all actions: {actions}')
+            for action in actions:
+                self._update_solution(prediction, model.sat_problem, action)
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
                       edge_feature, meta_data):
@@ -514,25 +517,26 @@ class Base(base.FactorGraphTrainerBase):
     def _update_solution(self, prediction, sat_problem, actions):
         if prediction[0] is None:
             return
-        actions = np.array(list(itertools.chain.from_iterable(actions)))
         print(f'actions: {list(actions)}')
-        sat_problem._solution[actions - 1] = prediction[0].squeeze()[actions - 1]
+        solution = sat_problem._solution.clone()
+        active_variables = sat_problem._active_variables.clone()
+        active_functions = sat_problem._active_functions.clone()
+        solution[actions - 1] = prediction[0].squeeze()[actions - 1]
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
-        _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
-        assignment = sat_problem._solution * sat_problem._active_variables
+        assignment = solution * active_variables
         # print(f'assignment: {assignment.shape}, {assignment}')
         input_num = torch.mm(vf_map_transpose, assignment.abs())
         function_eval = torch.mm(signed_vf_map_transpose, assignment)
         # Compute the de-activated functions -> deactivated_functions表示为真的子句
-        deactivated_functions = (function_eval > -input_num).float() * sat_problem._active_functions
+        deactivated_functions = (function_eval > -input_num).float() * active_functions
         indices = np.argwhere(deactivated_functions[:, 0] == 1)
-        sat_problem._active_functions[indices, 0] = 0
+        active_functions[indices, 0] = 0
         print(f'all clauses: {deactivated_functions.shape}, removed clauses： {indices.shape}')
-        sat_problem._active_variables[actions - 1] = 0
+        active_variables[actions - 1] = 0
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
-                                             np.argwhere(sat_problem._active_functions == 1).squeeze()[0])
+                                             np.argwhere(active_functions == 1).squeeze()[0])
         deactivated_sat = torch.index_select(deactivated_sat, 1,
-                                             np.argwhere(sat_problem._active_variables == 1).squeeze()[0])
+                                             np.argwhere(active_variables == 1).squeeze()[0])
         data_to_cnf(deactivated_sat, self.temp_dir)
 
     def validate(self, train_data, batch_replication = 1):
