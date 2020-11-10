@@ -78,6 +78,7 @@ class Batcher:
             raise Exception("Must specify unbatching mode (one of 'clause', 'variable', or 'literal'.)")
 
     def _unbatch_clauses(self, z):
+        # print(f'z: {z.size()}, {[int(x) for x in self.x_dims]}')
         return torch.split(z, [int(x) for x in self.x_dims])
 
     def _unbatch_literals(self, z):

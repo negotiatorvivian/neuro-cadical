@@ -315,7 +315,8 @@ class ReplayBuffer:
                 gs.append(g)
                 advs.append(adv)
                 cnfs.append(cnf)
-                self.logger.write_log(f'get batch: {len(action[0])}, action:{action}, g:{g}, adv:{adv}')
+                # self.logger.write_log(f'get batch: {len(action[0])}, action:{action}, g:{g}, adv:{adv}')
+                # self.logger.write_log(f'action:{action}, g:{g}, adv:{adv}')
             return Gs, mu_logitss, actions, gs, advs, cnfs, names
 
 
@@ -445,7 +446,7 @@ def validate_answers(tds, names, logger):
             res = cadical_fn(file, gpu = True)
             time += res['cpu_time']
             results.append(res["result"])
-        logger.write_log(f'name: {names}, time: {time/len(files)}, result: {results}')
+        logger.write_log(f'name: {names}; time: {time/len(files)}; result: {results};{len(results)}')
         print(f'name: {names}, time: {time/len(files)}')
 
 
@@ -583,6 +584,10 @@ class Learner:
             self.writer.add_text(name, str(value), self.GLOBAL_STEP_COUNT)
             self.writer.add_scalar(name, value, self.GLOBAL_STEP_COUNT)
 
+    def write_log(self, content):
+        for name, value in content.items():
+            self.logger.write_log(name + ':' + str(value))
+
     def data_loader(self):
         yield ray.get(self.buf.get_sp_batch.remote(self.batch_size))
 
@@ -701,11 +706,9 @@ class Learner:
     def predict(self):
         if ray.get(self.buf.batch_ready.remote(self.batch_size)):
             pass
-        start = time.time()
         batch = ray.get(self.buf.get_batch.remote(self.batch_size))
         self.predict_batch(*batch)
         del batch
-        self.logger.write_log(f'total_time: {time.time() - start}')
 
 
 def _parse_main():
@@ -795,6 +798,7 @@ def _main(is_train = True):
         waiting = 0
         completed = 0
         print(f'---- epoch: {k_epoch} ----------')
+        start = time.time()
 
         if is_train:
             shuffle_environments(workers)
@@ -809,8 +813,10 @@ def _main(is_train = True):
             for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
                                         range(opts.eps_per_worker * opts.n_workers)):
                 pass
+            learner.write_log.remote({'total_time': (time.time() - start)/(opts.eps_per_worker * opts.n_workers)})
+
             ray.get(learner.predict.remote())
 
 
 if __name__ == "__main__":
-    _main(False)
+    _main(True)

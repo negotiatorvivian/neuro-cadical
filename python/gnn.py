@@ -247,6 +247,7 @@ class Base(base.FactorGraphTrainerBase):
         self.model_list.append(self.gnn)
         self.parameters = self.get_parameter_list()
         self.batcher = batcher
+        self.logger = kwargs['logger']
         # self.temp_dir = tempfile.TemporaryDirectory()
 
     def transform_data(self, data):
@@ -341,17 +342,24 @@ class Base(base.FactorGraphTrainerBase):
 
             loss = torch.zeros(1, device = self._device)
             if G is not None:
-                mask = torch.sparse_coo_tensor(graph_map, (torch.FloatTensor(edge_feature)).squeeze().float(),
-                                               [int(G.shape[1] / 2), G.shape[0]]).unsqueeze(1).to_dense()
+                mask = torch.sparse.FloatTensor(graph_map.long(), edge_feature.squeeze(1),
+                                               torch.Size([int(G.shape[1] / 2), G.shape[0]]), device = self._device).unsqueeze(1).to_dense()
                 var_lemma_counts = lemma_occ(mask)
                 if np.all(label.cpu().numpy()):
                     core_var_masks = graph_feat.view([1, -1]).squeeze()
                     core_clause_masks = torch.ones(G.shape[0])
                 else:
                     core_var_masks = torch.from_numpy(np.ones(int(G.shape[1] / 2), dtype = np.int32))
-                    positive_edges = torch.zeros(edge_feature.shape)
-                    positive_edges[edge_feature > 0] = edge_feature[edge_feature > 0]
-                    core_clause_masks = torch.from_numpy(np.all(positive_edges.numpy(), axis = 1))
+                    edge_num = graph_map.size()[1]
+                    edge_num_range = torch.arange(edge_num, dtype = torch.int64, device = self._device)
+                    variable_sparse_ind = torch.stack([graph_map[0, :].long(), edge_num_range])
+                    variable_mask = torch.sparse.FloatTensor(variable_sparse_ind, edge_feature.squeeze(1),
+                                                             torch.Size([int(G.shape[1]/2), edge_num]), device = self._device).t()
+                    edge_function_mask = torch.sparse.mm(variable_mask, mask.squeeze())
+                    unsigned_edge_features = torch.abs(edge_feature).t()
+                    input_num = torch.sparse.mm(unsigned_edge_features, edge_function_mask).squeeze()
+                    function_eval = torch.sparse.mm(edge_feature.t(), edge_function_mask).squeeze()
+                    core_clause_masks = (function_eval > -input_num).float()
 
             for t in torch.arange(self.config['train_outer_recurrence_num'], dtype = torch.int32,
                                   device = self._device):
@@ -435,7 +443,7 @@ class Base(base.FactorGraphTrainerBase):
             for s in state:
                 del s
             actions = list(np.array(actions).squeeze())
-            print(f'all actions: {actions}')
+            self.logger.write_log(f'all actions: {actions}')
             temp_dir = tempfile.TemporaryDirectory()
             if isinstance(actions[0], int):
                 self._update_solution(prediction, model.sat_problem, np.array(actions), temp_dir)
@@ -528,16 +536,25 @@ class Base(base.FactorGraphTrainerBase):
         active_variables = sat_problem._active_variables.clone()
         active_functions = sat_problem._active_functions.clone()
         solution[actions - 1] = prediction[0].squeeze()[actions - 1]
-        _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
-        assignment = solution * active_variables
-        # print(f'assignment: {assignment.shape}, {assignment}')
-        input_num = torch.mm(vf_map_transpose, assignment.abs())
-        function_eval = torch.mm(signed_vf_map_transpose, assignment)
-        # Compute the de-activated functions -> deactivated_functions表示为真的子句
-        deactivated_functions = (function_eval > -input_num).float() * active_functions
-        indices = np.argwhere(deactivated_functions[:, 0] == 1)
-        active_functions[indices, 0] = 0
-        print(f'all clauses: {deactivated_functions.shape}, removed clauses： {indices.shape}')
+        flag = True
+        while True:
+            _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
+            assignment = solution * active_variables
+            # print(f'assignment: {assignment.shape}, {assignment}')
+            input_num = torch.mm(vf_map_transpose, assignment.abs())
+            function_eval = torch.mm(signed_vf_map_transpose, assignment)
+            # Compute the de-activated functions -> deactivated_functions表示为真的子句
+            deactivated_functions = (function_eval > -input_num).float() * active_functions
+            indices = np.argwhere(deactivated_functions[:, 0] == 1)
+            active_functions[indices, 0] = 0
+            size = indices.shape[1]
+            if size == 0 and flag:
+                print(f'action: {solution[actions - 1]} to {-solution[actions - 1]}')
+                solution[actions - 1] = -solution[actions - 1]
+                flag = not flag
+            else:
+                break
+        print(f'action value: {solution[actions - 1]}, removed clauses： {indices.shape[1]}')
         active_variables[actions - 1] = 0
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
                                              np.argwhere(active_functions == 1).squeeze()[0])
