@@ -342,10 +342,11 @@ class Base(base.FactorGraphTrainerBase):
 
             loss = torch.zeros(1, device = self._device)
             if G is not None:
+                # print(f'graph_map: {graph_map}, {graph_map.shape}, {G.shape}')
                 mask = torch.sparse.FloatTensor(graph_map.long(), edge_feature.squeeze(1),
                                                torch.Size([int(G.shape[1] / 2), G.shape[0]]), device = self._device).unsqueeze(1).to_dense()
                 var_lemma_counts = lemma_occ(mask)
-                if np.all(label.cpu().numpy()):
+                if np.all(label.cpu().numpy()) and graph_feat.shape[1] > 0:
                     core_var_masks = graph_feat.view([1, -1]).squeeze()
                     core_clause_masks = torch.ones(G.shape[0])
                 else:
@@ -360,30 +361,31 @@ class Base(base.FactorGraphTrainerBase):
                     input_num = torch.sparse.mm(unsigned_edge_features, edge_function_mask).squeeze()
                     function_eval = torch.sparse.mm(edge_feature.t(), edge_function_mask).squeeze()
                     core_clause_masks = (function_eval > -input_num).float()
+                    print(f'core_clause_masks: {core_clause_masks}, {torch.sum(core_clause_masks)}')
 
-            for t in torch.arange(self.config['train_outer_recurrence_num'], dtype = torch.int32,
-                                  device = self._device):
-                prediction, state = model(init_state = state, graph_map = graph_map,
-                                          batch_variable_map = batch_variable_map,
-                                          batch_function_map = batch_function_map, edge_feature = edge_feature,
-                                          meta_data = None, is_training = True,
-                                          iteration_num = self.config['train_inner_recurrence_num'])
+                for t in torch.arange(self.config['train_outer_recurrence_num'], dtype = torch.int32,
+                                      device = self._device):
+                    prediction, state = model(init_state = state, graph_map = graph_map,
+                                              batch_variable_map = batch_variable_map,
+                                              batch_function_map = batch_function_map, edge_feature = edge_feature,
+                                              meta_data = None, is_training = True,
+                                              iteration_num = self.config['train_inner_recurrence_num'])
 
-                loss += self._compute_loss(model = base._module(model), loss = self._loss_evaluator,
-                                           prediction = prediction, label = label, graph_map = graph_map,
-                                           batch_variable_map = batch_variable_map,
-                                           batch_function_map = batch_function_map, edge_feature = edge_feature,
-                                           meta_data = None) * lambda_value.pow(
-                    (self.config['train_outer_recurrence_num'] - t - 1).float())
-                batched_V_drat_logits, batched_v_pre_logits, batched_V_core_logits, batched_C_core_logits = self.gnn(G)
-                # (lambda x: (
-                #     x[0].view([x[0].size(0)]), x[1].view([x[1].size(0)]), x[2].view([x[2].size(0)], x[3].view([x[3].size(0)]))))(self.gnn(G))
-
-                loss += self.model_list[-1]._compute_loss(self.batcher, batched_V_drat_logits, batched_V_core_logits,
-                                                          batched_C_core_logits,
-                                                          torch.from_numpy(np.array([var_lemma_counts])).type(
-                                                              torch.float32).squeeze(), core_var_masks,
-                                                          core_clause_masks)
+                    loss += self._compute_loss(model = base._module(model), loss = self._loss_evaluator,
+                                               prediction = prediction, label = label, graph_map = graph_map,
+                                               batch_variable_map = batch_variable_map,
+                                               batch_function_map = batch_function_map, edge_feature = edge_feature,
+                                               meta_data = None) * lambda_value.pow(
+                        (self.config['train_outer_recurrence_num'] - t - 1).float())
+                    batched_V_drat_logits, batched_v_pre_logits, batched_V_core_logits, batched_C_core_logits = self.gnn(G)
+                    # (lambda x: (
+                    #     x[0].view([x[0].size(0)]), x[1].view([x[1].size(0)]), x[2].view([x[2].size(0)], x[3].view([x[3].size(0)]))))(self.gnn(G))
+                    # print(f'core_var_masks: {core_var_masks.shape}, {core_clause_masks}')
+                    loss += self.model_list[-1]._compute_loss(self.batcher, batched_V_drat_logits, batched_V_core_logits,
+                                                              batched_C_core_logits,
+                                                              torch.from_numpy(np.array([var_lemma_counts])).type(
+                                                                  torch.float32).squeeze(), core_var_masks,
+                                                              core_clause_masks)
             print('loss:', loss)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), self.config['clip_norm'])
@@ -437,11 +439,13 @@ class Base(base.FactorGraphTrainerBase):
                                          batch_variable_map, batch_function_map, edge_feature, graph_feat, label, misc_data)
                 print(message)
 
-            for p in prediction:
-                del p
+            res = self._cnf_evaluator(variable_prediction = prediction[0], graph_map = graph_map,
+                                      batch_variable_map = batch_variable_map, batch_function_map = batch_function_map,
+                                      edge_feature = edge_feature, meta_data = graph_feat)
+            output, unsat_clause_num = [a.detach().cpu().numpy() for a in res]
+            if unsat_clause_num == 0:
+                print('-------True-------')
 
-            for s in state:
-                del s
             actions = list(np.array(actions).squeeze())
             self.logger.write_log(f'all actions: {actions}')
             temp_dir = tempfile.TemporaryDirectory()
@@ -450,6 +454,11 @@ class Base(base.FactorGraphTrainerBase):
             else:
                 for action in actions:
                     self._update_solution(prediction, model.sat_problem, action, temp_dir)
+            for p in prediction:
+                del p
+
+            for s in state:
+                del s
             return temp_dir
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
@@ -531,30 +540,30 @@ class Base(base.FactorGraphTrainerBase):
     def _update_solution(self, prediction, sat_problem, actions, temp_dir):
         if prediction[0] is None:
             return
-        print(f'actions: {actions}')
-        solution = sat_problem._solution.clone()
+        solution = torch.zeros(sat_problem._solution.shape[0], device = self._device)
         active_variables = sat_problem._active_variables.clone()
         active_functions = sat_problem._active_functions.clone()
         solution[actions - 1] = prediction[0].squeeze()[actions - 1]
         flag = True
+        _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         while True:
-            _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
             assignment = solution * active_variables
-            # print(f'assignment: {assignment.shape}, {assignment}')
             input_num = torch.mm(vf_map_transpose, assignment.abs())
             function_eval = torch.mm(signed_vf_map_transpose, assignment)
+            # print(f'assignment: {assignment}, input_num: {input_num}, function_eval: {function_eval}, {(function_eval > -input_num).float()}')
             # Compute the de-activated functions -> deactivated_functions表示为真的子句
             deactivated_functions = (function_eval > -input_num).float() * active_functions
+            print(f'deactivated_functions: {deactivated_functions.shape}')
             indices = np.argwhere(deactivated_functions[:, 0] == 1)
             active_functions[indices, 0] = 0
             size = indices.shape[1]
             if size == 0 and flag:
-                print(f'action: {solution[actions - 1]} to {-solution[actions - 1]}')
+                print(f'removed clauses: {size}, change action: {solution[actions - 1]} to {-solution[actions - 1]}')
                 solution[actions - 1] = -solution[actions - 1]
                 flag = not flag
             else:
                 break
-        print(f'action value: {solution[actions - 1]}, removed clauses： {indices.shape[1]}')
+        print(f'action value: {actions}, {solution[actions - 1]}, removed clauses： {indices.shape[1]}')
         active_variables[actions - 1] = 0
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
                                              np.argwhere(active_functions == 1).squeeze()[0])

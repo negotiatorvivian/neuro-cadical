@@ -13,7 +13,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from sp.factorgraph.dataset import FactorGraphDataset
+from python.sp.factorgraph.dataset import FactorGraphDataset
 
 
 def _module(model):

@@ -95,3 +95,20 @@ def set_env(from_cnf = None, from_file = None):
             raise e
     else:
         raise Exception("must set env with CNF or file")
+
+
+def get_clauses(G):
+    nv = int(1/2 * G.shape[1])
+    G = G.to_dense()
+    clauses = []
+    for i in range(G.shape[0]):
+        pos_indices = torch.where(G[i][0: nv] != 0)[0]
+        neg_indices = torch.where(G[i][nv:] != 0)[0]
+        if len(pos_indices) + len(neg_indices) == 0:
+            continue
+        c1 = (pos_indices.numpy() + 1).astype(int)
+        c2 = (-neg_indices.numpy() - 1).astype(int)
+        c = np.concatenate([c1, c2])
+        clauses.append(list(c))
+    # print(f'G:{clauses}')
+    return clauses

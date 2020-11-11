@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from sp.nn import util
+from python.sp.nn import util
 
 
 ###############################################################

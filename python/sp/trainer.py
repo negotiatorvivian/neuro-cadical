@@ -10,8 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import sys
 
-from sp.factorgraph import FactorGraphTrainerBase
-from sp.nn import solver, util
+from python.sp.factorgraph import FactorGraphTrainerBase
+from python.sp.nn import solver, util
 
 
 ##########################################################################################################################

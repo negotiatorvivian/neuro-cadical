@@ -22,7 +22,7 @@ from satenv import SatEnv
 from python.gnn import defaultGNN1Cfg, Base
 from python.gnn import rl_GNN1 as GNN1
 from python.batch import Batcher
-from python.util import files_with_extension, recursively_get_files, load_data, set_env
+from python.util import files_with_extension, recursively_get_files, load_data, set_env, get_clauses
 from python.data_util import coo
 from python.train1 import TrainLogger, Trainer
 from python.solver import cadical_fn
@@ -121,9 +121,11 @@ def sample_trajectory(agent, env, cnf, is_train, length = 15):
     return Gs, mu_logitss, actions, rewards, value_estimates, cnfs, name
 
 
-def cnf_to_data(cnfs):
+def cnf_to_data(Gs, cnfs):
     results = []
-    for cnf in cnfs:
+    for i, G in enumerate(Gs):
+        cls = get_clauses(G)
+        cnf = CNF(from_clauses = cls, is_sat = cnfs[i].is_sat)
         n_vars = cnf.nv
         n_cls = len(cnf.clauses)
         C_idxs, L_idxs = coo(cnf)
@@ -135,6 +137,8 @@ def cnf_to_data(cnfs):
         result = cnf.is_sat
         answers = cnf.answers
         results.append((n_vars, n_cls, indices, edge_features, answers, float(result), []))
+        # print(f'----result: {result}, {n_vars}, {n_cls}, {edge_features}, {answers}')
+        # results.append((n_vars, n_cls, indices, edge_features, answers, float(result), []))
     # return torch.sparse.FloatTensor(indices = indices, values = torch.from_numpy(edge_features), size = size)
     return results
 
@@ -146,7 +150,7 @@ def process_trajectory(Gs, mu_logitss, actions, rewards, vals, cnfs, name, last_
     deltas = np.append(rewards, last_val)[:-1] + gam * np.append(vals, last_val)[1:] - np.append(vals, last_val)[
                                                                                        :-1]  # future advantage
     adv = discount_cumsum(deltas, int(gam * lam))
-    data = cnf_to_data(cnfs)
+    data = cnf_to_data(Gs, cnfs)
     return Gs, mu_logitss, actions, (gs + 1.0) / 2.0, adv, gs[0], data, name  # note, gs[0] is total value
 
 
@@ -446,7 +450,7 @@ def validate_answers(tds, names, logger):
             res = cadical_fn(file, gpu = True)
             time += res['cpu_time']
             results.append(res["result"])
-        logger.write_log(f'name: {names}; time: {time/len(files)}; result: {results};{len(results)}')
+        logger.write_log(f'name: {names[0]}; time: {time/len(files)}; result: {results};{len(results)}')
         print(f'name: {names}, time: {time/len(files)}')
 
 
@@ -819,4 +823,4 @@ def _main(is_train = True):
 
 
 if __name__ == "__main__":
-    _main(True)
+    _main(False)

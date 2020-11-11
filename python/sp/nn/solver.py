@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from sp.nn import pdp_propagate, pdp_decimate, pdp_predict, util
+from python.sp.nn import pdp_propagate, pdp_decimate, pdp_predict, util
 
 
 ###############################################################
@@ -53,7 +53,7 @@ class SATProblem(object):
 
         self._active_variables = torch.ones(self._variable_num, 1, device = self._device)
         self._active_functions = torch.ones(self._function_num, 1, device = self._device)
-        self._solution = torch.ones(self._variable_num, device = self._device)
+        self._solution = torch.zeros(self._variable_num, device = self._device)
 
         self._batch_size = (self._batch_variable_map.max() + 1).long().item()
         self._is_sat = 0.5 * torch.ones(self._batch_size, device = self._device)
