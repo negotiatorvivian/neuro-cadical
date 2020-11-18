@@ -105,7 +105,7 @@ class MultiLayerPerceptron(nn.Module):
         for layer in self._inner_layers:
             x = F.relu(layer(x))
 
-        return F.sigmoid(self._output_layer(x))
+        return torch.sigmoid(self._output_layer(x))
 
 
 ##########################################################################################################################

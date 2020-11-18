@@ -63,10 +63,11 @@ def softmax_sample_from_logits(logits):
 
 def softmax_all_from_logits(logits, length):
     probs = torch.softmax(logits, 0)
+    length = min(length, probs.shape[0])
     return torch.multinomial(probs, length).cpu().numpy()
 
 
-def sample_trajectory(agent, env, cnf, is_train, length = 15):
+def sample_trajectory(agent, env, cnf, is_train):
     """
     Samples a trajectory from the environment and then resets it. This assumes the environment has been initialized.
     """
@@ -88,9 +89,11 @@ def sample_trajectory(agent, env, cnf, is_train, length = 15):
             # active_variables = np.ones(CL_idxs.n_vars, dtype = int)
             # prediction, _ = agent.predict(data)
             # print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
+            max_length = int(CL_idxs.n_vars / 20) + 10
+            min_length = int(CL_idxs.n_vars / 20) - 10
             G = mk_G(CL_idxs)
             mu_logits, value_estimate = agent.act(G)
-            sample_length = random.randint(3, length)
+            sample_length = random.randint(min_length, max_length)
             action = list(softmax_all_from_logits(mu_logits, sample_length) + 1)  # torch multinomial zero-indexes
             actions.append(action)
             # new_prediction = prediction[np.argwhere(active_variables > 0)]
@@ -125,7 +128,7 @@ def cnf_to_data(Gs, cnfs):
     results = []
     for i, G in enumerate(Gs):
         cls = get_clauses(G)
-        cnf = CNF(from_clauses = cls, is_sat = cnfs[i].is_sat)
+        cnf = CNF(from_clauses = cls, is_sat = cnfs[0].is_sat)
         n_vars = cnf.nv
         n_cls = len(cnf.clauses)
         C_idxs, L_idxs = coo(cnf)
@@ -235,8 +238,8 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
                 print("BAD CNF:", from_file)
                 raise e  # else:  #     raise Exception("must set env with CNF or file")
 
-    def sample_trajectory(self, length, is_train = True):
-        tau = sample_trajectory(self.agent, self.env, self.cnf, is_train, length = length)
+    def sample_trajectory(self, is_train = True):
+        tau = sample_trajectory(self.agent, self.env, self.cnf, is_train)
         self.buf.ingest_trajectory.remote(process_trajectory(*tau))
         print(f"SAMPLED TRAJECTORY OF LENGTH {len(tau[0])}")
         self.trajectory_count += 1
@@ -450,7 +453,10 @@ def validate_answers(tds, names, logger):
             res = cadical_fn(file, gpu = True)
             time += res['cpu_time']
             results.append(res["result"])
-        logger.write_log(f'name: {names[0]}; time: {time/len(files)}; result: {results};{len(results)}')
+            if res["result"]:
+                break
+        result = True in results
+        logger.write_log(f';;name: {names[0]}; time: {time/len(files)}; result: {result};')
         print(f'name: {names}, time: {time/len(files)}')
 
 
@@ -713,9 +719,10 @@ class Learner:
         batch = ray.get(self.buf.get_batch.remote(self.batch_size))
         self.predict_batch(*batch)
         del batch
+        self.weight_manager.update_index.remote(os.path.join(self.logdir, 'log.txt'))
 
 
-def _parse_main():
+def _parse_main(is_train):
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-workers", dest = "n_workers", action = "store", default = 1, type = int)
@@ -731,11 +738,16 @@ def _parse_main():
     parser.add_argument("--ckpt-freq", dest = "ckpt_freq", action = "store", type = int, default = 10)
     parser.add_argument("--batch-size", dest = "batch_size", action = "store", type = int, default = 1)
     parser.add_argument("--object-store", dest = "object_store", action = "store", default = None)
-    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 10, type = int)
+    parser.add_argument("--eps-per-worker", dest = "eps_per_worker", action = "store", default = 5, type = int)
     parser.add_argument("--model-cfg", dest = "model_cfg", action = "store", default = None)
     parser.add_argument("--sp-cfg", dest = "sp_cfg", action = "store", default = None)
 
     opts = parser.parse_args()
+    if is_train:
+        opts.root_dir = os.path.join(opts.root_dir, 'dtrain')
+    else:
+        opts.root_dir = os.path.join(opts.root_dir, 'dpredict')
+
     opts.root_dir = os.path.join(opts.root_dir, time.strftime("%Y%m%d-%H%M", time.localtime()))
     opts.ckpt_dir = os.path.join(opts.root_dir, 'weights')
     opts.log_dir = os.path.join(opts.root_dir, 'logs')
@@ -751,7 +763,7 @@ def _parse_main():
 
 
 def _main(is_train = True):
-    opts = _parse_main()
+    opts = _parse_main(is_train)
     if not os.path.exists(opts.log_dir):
         os.makedirs(opts.log_dir)
     if not os.path.exists(opts.ckpt_dir):
@@ -809,12 +821,12 @@ def _main(is_train = True):
         else:
             predict_environments(workers)
         if is_train:
-            for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
+            for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(is_train)),
                                         range(opts.eps_per_worker * opts.n_workers)):
                 pass
             ray.get(learner.train.remote(step_limit = 5000, synchronous = True))
         else:
-            for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(opts.length, is_train)),
+            for _ in pool.map_unordered((lambda a, v: a.sample_trajectory.remote(is_train)),
                                         range(opts.eps_per_worker * opts.n_workers)):
                 pass
             learner.write_log.remote({'total_time': (time.time() - start)/(opts.eps_per_worker * opts.n_workers)})

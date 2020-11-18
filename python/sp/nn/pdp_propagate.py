@@ -181,7 +181,7 @@ class SurveyPropagator(nn.Module):
 
         if self._include_adaptors:
             decimator_function_state = self._variable_input_projector(decimator_function_state)
-            decimator_function_state[:, 0] = F.sigmoid(decimator_function_state[:, 0])
+            decimator_function_state[:, 0] = torch.sigmoid(decimator_function_state[:, 0])
             decimator_function_state[:, 1] = torch.sign(decimator_function_state[:, 1])
 
         external_force = decimator_function_state[:, 1].unsqueeze(1)

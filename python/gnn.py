@@ -344,7 +344,7 @@ class Base(base.FactorGraphTrainerBase):
             if G is not None:
                 # print(f'graph_map: {graph_map}, {graph_map.shape}, {G.shape}')
                 mask = torch.sparse.FloatTensor(graph_map.long(), edge_feature.squeeze(1),
-                                               torch.Size([int(G.shape[1] / 2), G.shape[0]]), device = self._device).unsqueeze(1).to_dense()
+                                                torch.Size([int(G.shape[1] / 2), G.shape[0]]), device = self._device).unsqueeze(1).to_dense()
                 var_lemma_counts = lemma_occ(mask)
                 if np.all(label.cpu().numpy()) and graph_feat.shape[1] > 0:
                     core_var_masks = graph_feat.view([1, -1]).squeeze()
@@ -355,13 +355,12 @@ class Base(base.FactorGraphTrainerBase):
                     edge_num_range = torch.arange(edge_num, dtype = torch.int64, device = self._device)
                     variable_sparse_ind = torch.stack([graph_map[0, :].long(), edge_num_range])
                     variable_mask = torch.sparse.FloatTensor(variable_sparse_ind, edge_feature.squeeze(1),
-                                                             torch.Size([int(G.shape[1]/2), edge_num]), device = self._device).t()
+                                                             torch.Size([int(G.shape[1] / 2), edge_num]), device = self._device).t()
                     edge_function_mask = torch.sparse.mm(variable_mask, mask.squeeze())
                     unsigned_edge_features = torch.abs(edge_feature).t()
                     input_num = torch.sparse.mm(unsigned_edge_features, edge_function_mask).squeeze()
                     function_eval = torch.sparse.mm(edge_feature.t(), edge_function_mask).squeeze()
                     core_clause_masks = (function_eval > -input_num).float()
-                    print(f'core_clause_masks: {core_clause_masks}, {torch.sum(core_clause_masks)}')
 
                 for t in torch.arange(self.config['train_outer_recurrence_num'], dtype = torch.int32,
                                       device = self._device):
@@ -404,11 +403,10 @@ class Base(base.FactorGraphTrainerBase):
                 segment_num = len(data[0])
 
                 for i in range(segment_num):
-
                     (graph_map, batch_variable_map, batch_function_map,
-                    edge_feature, graph_feat, label, misc_data) = [self._to_cuda(d[i]) for d in data]
+                     edge_feature, graph_feat, label, misc_data) = [self._to_cuda(d[i]) for d in data]
                     path = self.predict_batch(graph_map, batch_variable_map, batch_function_map,
-                                        edge_feature, graph_feat, label, misc_data, actions, None, batch_replication = 1)
+                                              edge_feature, graph_feat, label, misc_data, actions, None, batch_replication = 1)
                     paths.append(path)
                     del graph_map
                     del batch_variable_map
@@ -420,8 +418,8 @@ class Base(base.FactorGraphTrainerBase):
         return paths
 
     def predict_batch(self, graph_map, batch_variable_map, batch_function_map,
-        edge_feature, graph_feat, label, misc_data, actions, post_processor, batch_replication = 1):
-        edge_num = graph_map.size(1)
+                      edge_feature, graph_feat, label, misc_data, actions, post_processor, batch_replication = 1):
+        print(f'label: {label.cpu()}')
 
         for (i, model) in enumerate(self.model_list[:-1]):
 
@@ -446,14 +444,23 @@ class Base(base.FactorGraphTrainerBase):
             if unsat_clause_num == 0:
                 print('-------True-------')
 
-            actions = list(np.array(actions).squeeze())
-            self.logger.write_log(f'all actions: {actions}')
+            actions = np.array(actions).squeeze()
+            self.logger.write_log(f'all actions: {list(actions)}; {len(list(actions))}')
             temp_dir = tempfile.TemporaryDirectory()
-            if isinstance(actions[0], int):
-                self._update_solution(prediction, model.sat_problem, np.array(actions), temp_dir)
+            if np.all(label.cpu().numpy()):
+                if isinstance(actions[0], int) or isinstance(actions[0], np.int64):
+                    self._update_solution(prediction, model.sat_problem, actions, temp_dir)
+                    # for i in range(len(actions)):
+                    #     indices = np.random.choice(range(len(actions)), 2)
+                    #     self._update_solution(prediction, model.sat_problem, actions[indices], temp_dir)
+                else:
+                    for i in range(len(actions)):
+                        for j in range(len(actions[i])):
+                            indices = np.random.choice(range(len(actions)), 2)
+                            self._update_solution(prediction, model.sat_problem, actions[i][indices], temp_dir)
             else:
-                for action in actions:
-                    self._update_solution(prediction, model.sat_problem, action, temp_dir)
+                self._unsat_core(prediction, model.sat_problem, actions, temp_dir)
+
             for p in prediction:
                 del p
 
@@ -534,7 +541,6 @@ class Base(base.FactorGraphTrainerBase):
                                                          local_search_iterations = config['local_search_iteration'],
                                                          epsilon = config['epsilon'])]
 
-
         return model_list
 
     def _update_solution(self, prediction, sat_problem, actions, temp_dir):
@@ -542,34 +548,54 @@ class Base(base.FactorGraphTrainerBase):
             return
         solution = torch.zeros(sat_problem._solution.shape[0], device = self._device)
         active_variables = sat_problem._active_variables.clone()
-        active_functions = sat_problem._active_functions.clone()
-        solution[actions - 1] = prediction[0].squeeze()[actions - 1]
+        solution[actions - 1] = 2 * prediction[0].squeeze()[actions - 1] - 1
         flag = True
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
-        while True:
-            assignment = solution * active_variables
-            input_num = torch.mm(vf_map_transpose, assignment.abs())
-            function_eval = torch.mm(signed_vf_map_transpose, assignment)
-            # print(f'assignment: {assignment}, input_num: {input_num}, function_eval: {function_eval}, {(function_eval > -input_num).float()}')
-            # Compute the de-activated functions -> deactivated_functions表示为真的子句
-            deactivated_functions = (function_eval > -input_num).float() * active_functions
-            print(f'deactivated_functions: {deactivated_functions.shape}')
-            indices = np.argwhere(deactivated_functions[:, 0] == 1)
-            active_functions[indices, 0] = 0
-            size = indices.shape[1]
-            if size == 0 and flag:
-                print(f'removed clauses: {size}, change action: {solution[actions - 1]} to {-solution[actions - 1]}')
-                solution[actions - 1] = -solution[actions - 1]
-                flag = not flag
-            else:
-                break
-        print(f'action value: {actions}, {solution[actions - 1]}, removed clauses： {indices.shape[1]}')
+        # while True:
+        #     assignment = solution * active_variables
+        #     input_num = torch.mm(vf_map_transpose, assignment.abs())
+        #     function_eval = torch.mm(signed_vf_map_transpose, assignment)
+        #     # Compute the de-activated functions -> deactivated_functions表示为真的子句
+        #     deactivated_functions = (function_eval > -input_num).float() * active_functions
+        #     print(f'deactivated_functions: {deactivated_functions.shape}')
+        #     indices = np.argwhere(deactivated_functions[:, 0] == 1)
+        #     active_functions[indices, 0] = 0
+        #     size = indices.shape[1]
+        #     if size == 0 and flag:
+        #         print(f'removed clauses: {size}, change action: {solution[actions - 1]} to {-solution[actions - 1]}')
+        #         solution[actions - 1] = -solution[actions - 1]
+        #         flag = not flag
+        #     else:
+        #         break
+        deactivated_functions = (signed_vf_map_transpose.to_dense()[:, [actions - 1]] * solution[actions - 1] > 0).float()
         active_variables[actions - 1] = 0
+
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
-                                             np.argwhere(active_functions == 1).squeeze()[0])
-        deactivated_sat = torch.index_select(deactivated_sat, 1,
-                                             np.argwhere(active_variables == 1).squeeze()[0])
+                                             np.argwhere(deactivated_functions == 0).squeeze()[0])
+        deactivated_sat[:, actions - 1] = 0
+        # deactivated_sat = torch.index_select(deactivated_sat, 1,
+        #                                      np.argwhere(active_variables == 1).squeeze()[0])
+        print(f'''action value: {actions}, {solution[actions - 1]}, removed clauses： {torch.sum(
+            deactivated_functions)}, cnf_size:{signed_vf_map_transpose.shape} to {deactivated_sat.shape}''')
         data_to_cnf(deactivated_sat, temp_dir)
+
+    def _unsat_core(self, prediction, sat_problem, actions, temp_dir):
+        if prediction[0] is None:
+            return
+        _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
+        '''remove variables & related clauses'''
+        part = np.array(list(set(np.random.choice(actions, len(actions)/2))))
+        for part_actions in [part, actions]:
+            deactivated_functions = (signed_vf_map_transpose.to_dense()[:, [part_actions - 1]] != 0).squeeze().float()
+            actions_signs = torch.ones(len(part_actions), 1)
+            deactivated_functions = torch.mm(deactivated_functions, actions_signs)
+            deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
+                                                 np.argwhere(deactivated_functions == 0).squeeze()[0])
+            '''remove variables only'''
+            # deactivated_sat = signed_vf_map_transpose.to_dense().clone()
+            # deactivated_sat[:, actions - 1] = 0
+            # print(f'''action value: {actions}, {len(actions)}, cnf_size:{signed_vf_map_transpose.shape} to {deactivated_sat.shape}''')
+            data_to_cnf(deactivated_sat, temp_dir)
 
     def validate(self, train_data, batch_replication = 1):
         predictions = []
@@ -578,7 +604,7 @@ class Base(base.FactorGraphTrainerBase):
             for i in range(segment_num):
                 (graph_map, batch_variable_map, batch_function_map, edge_feature, graph_feat, label, _) = [d[i] for d in data]
                 prediction = self.validate_batch(graph_map, batch_variable_map, batch_function_map,
-                                    edge_feature, graph_feat, label, batch_replication)
+                                                 edge_feature, graph_feat, label, batch_replication)
                 predictions.append(prediction)
 
                 del graph_map

@@ -26,7 +26,7 @@ class Perceptron(nn.Module):
         self._layer2 = nn.Linear(hidden_dimension, output_dimension, bias=False)
 
     def forward(self, inp):
-        return F.sigmoid(self._layer2(F.relu(self._layer1(inp))))
+        return torch.sigmoid(self._layer2(F.relu(self._layer1(inp))))
 
 
 ##########################################################################################################################

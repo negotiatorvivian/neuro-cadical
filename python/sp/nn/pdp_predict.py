@@ -5,7 +5,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from python.sp.nn import util
 
@@ -162,7 +161,7 @@ class SurveyScorer(nn.Module):
 
         if self._include_adaptors:
             function_message = self._projector(message_state[1])
-            function_message[:, 0] = F.sigmoid(function_message[:, 0])
+            function_message[:, 0] = torch.sigmoid(function_message[:, 0])
             function_message[:, 1] = torch.sign(function_message[:, 1])
         else:
             function_message = message_state[1]
