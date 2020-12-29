@@ -15,6 +15,7 @@ from python.sp.nn.util import SatCNFEvaluator, SatLossEvaluator
 from python.gen_data import data_to_cnf
 from python.train1 import compute_softmax_kldiv_loss_from_logits, compute_mask_loss
 from python.gen_data import lemma_occ
+from python.util import get_granularity
 
 
 def _module(model):
@@ -397,6 +398,7 @@ class Base(base.FactorGraphTrainerBase):
 
     def predict(self, G, actions, *train_data):
         paths = []
+        actionss = []
         with torch.no_grad():
 
             for (j, data) in enumerate(train_data, 1):
@@ -405,9 +407,10 @@ class Base(base.FactorGraphTrainerBase):
                 for i in range(segment_num):
                     (graph_map, batch_variable_map, batch_function_map,
                      edge_feature, graph_feat, label, misc_data) = [self._to_cuda(d[i]) for d in data]
-                    path = self.predict_batch(graph_map, batch_variable_map, batch_function_map,
-                                              edge_feature, graph_feat, label, misc_data, actions, None, batch_replication = 1)
+                    path, new_actions = self.predict_batch(graph_map, batch_variable_map, batch_function_map,
+                                                           edge_feature, graph_feat, label, misc_data, actions, G, None, batch_replication = 1)
                     paths.append(path)
+                    actionss.append(new_actions)
                     del graph_map
                     del batch_variable_map
                     del batch_function_map
@@ -415,13 +418,14 @@ class Base(base.FactorGraphTrainerBase):
                     del graph_feat
                     del label
 
-        return paths
+        return paths, actionss
 
     def predict_batch(self, graph_map, batch_variable_map, batch_function_map,
-                      edge_feature, graph_feat, label, misc_data, actions, post_processor, batch_replication = 1):
+                      edge_feature, graph_feat, label, misc_data, actions, G, post_processor, batch_replication = 1):
         print(f'label: {label.cpu()}')
+        new_actions = []
 
-        for (i, model) in enumerate(self.model_list[:-1]):
+        for (j, model) in enumerate(self.model_list[:-1]):
 
             state = _module(model).get_init_state(graph_map, batch_variable_map, batch_function_map,
                                                   edge_feature, graph_feat, randomized = False, batch_replication = batch_replication)
@@ -450,23 +454,30 @@ class Base(base.FactorGraphTrainerBase):
             if np.all(label.cpu().numpy()):
                 if isinstance(actions[0], int) or isinstance(actions[0], np.int64):
                     self._update_solution(prediction, model.sat_problem, actions, temp_dir)
-                    # for i in range(len(actions)):
-                    #     indices = np.random.choice(range(len(actions)), 2)
-                    #     self._update_solution(prediction, model.sat_problem, actions[indices], temp_dir)
+                    new_actions.append(list(actions))
+                    for i in range(int(len(actions)/5)):
+                        indices = np.random.choice(range(len(actions)), 3)
+                        self._update_solution(prediction, model.sat_problem, actions[indices], temp_dir)
+                        new_actions.append(list(actions[indices]))
                 else:
                     for i in range(len(actions)):
-                        for j in range(len(actions[i])):
+                        self._update_solution(prediction, model.sat_problem, actions[i], temp_dir)
+                        new_actions.append(list(actions[i]))
+                        for k in range(len(actions[i])):
                             indices = np.random.choice(range(len(actions)), 2)
                             self._update_solution(prediction, model.sat_problem, actions[i][indices], temp_dir)
+                            new_actions.append(list(actions[i][indices]))
+
             else:
-                self._unsat_core(prediction, model.sat_problem, actions, temp_dir)
+                _, _, _, clause_logits = self.model_list[-1](G)
+                new_actions = self._unsat_core(prediction, clause_logits, model.sat_problem, actions, temp_dir)
 
             for p in prediction:
                 del p
 
             for s in state:
                 del s
-            return temp_dir
+        return temp_dir, new_actions
 
     def _compute_loss(self, model, loss, prediction, label, graph_map, batch_variable_map, batch_function_map,
                       edge_feature, meta_data):
@@ -567,35 +578,82 @@ class Base(base.FactorGraphTrainerBase):
         #         flag = not flag
         #     else:
         #         break
-        deactivated_functions = (signed_vf_map_transpose.to_dense()[:, [actions - 1]] * solution[actions - 1] > 0).float()
-        active_variables[actions - 1] = 0
+        indices = []
+        for action in actions:
+            temp = np.argwhere(
+                torch.mm(signed_vf_map_transpose.to_dense()[:, [action - 1]], torch.tensor([solution[action - 1]]).unsqueeze(1)) > 0)
 
+            indices += list(temp.numpy()[0])
+        indices = list(set(indices))
+        deactivated_functions = torch.ones(signed_vf_map_transpose.shape[0])
+        # deactivated_functions = (
+        #             torch.mm(signed_vf_map_transpose.to_dense()[:, [actions - 1]].squeeze(), solution[actions - 1].unsqueeze(1)) > 0).float()
+        active_variables[actions - 1] = 0
+        deactivated_functions[indices] = 0
+        # deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
+        #                                      np.argwhere(deactivated_functions == 0).squeeze()[0])
         deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
-                                             np.argwhere(deactivated_functions == 0).squeeze()[0])
-        deactivated_sat[:, actions - 1] = 0
-        # deactivated_sat = torch.index_select(deactivated_sat, 1,
-        #                                      np.argwhere(active_variables == 1).squeeze()[0])
-        print(f'''action value: {actions}, {solution[actions - 1]}, removed clauses： {torch.sum(
-            deactivated_functions)}, cnf_size:{signed_vf_map_transpose.shape} to {deactivated_sat.shape}''')
+                                             np.argwhere(deactivated_functions != 0).squeeze())
+        # deactivated_sat[:, actions - 1] = 0
+        deactivated_sat = torch.index_select(deactivated_sat, 1,
+                                             np.argwhere(active_variables == 1).squeeze()[0])
+        print(f'''action value: {actions}, {solution[actions - 1]}, removed clauses： {len(
+            indices)}, cnf_size:{signed_vf_map_transpose.shape} to {deactivated_sat.shape}''')
+        self.logger.write_log(f'''removed clauses： {len(
+            indices)}; cnf_size:{signed_vf_map_transpose.shape} to {deactivated_sat.shape}''')
         data_to_cnf(deactivated_sat, temp_dir)
 
-    def _unsat_core(self, prediction, sat_problem, actions, temp_dir):
+    def _unsat_core(self, prediction, clause_logits, sat_problem, actions, temp_dir):
         if prediction[0] is None:
             return
+
+        non_negative_indices = np.argwhere(clause_logits.squeeze(1) > 0)
         _, vf_map_transpose, _, signed_vf_map_transpose = sat_problem._vf_mask_tuple
         '''remove variables & related clauses'''
-        part = np.array(list(set(np.random.choice(actions, len(actions)/2))))
-        for part_actions in [part, actions]:
-            deactivated_functions = (signed_vf_map_transpose.to_dense()[:, [part_actions - 1]] != 0).squeeze().float()
-            actions_signs = torch.ones(len(part_actions), 1)
-            deactivated_functions = torch.mm(deactivated_functions, actions_signs)
-            deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
-                                                 np.argwhere(deactivated_functions == 0).squeeze()[0])
-            '''remove variables only'''
-            # deactivated_sat = signed_vf_map_transpose.to_dense().clone()
-            # deactivated_sat[:, actions - 1] = 0
-            # print(f'''action value: {actions}, {len(actions)}, cnf_size:{signed_vf_map_transpose.shape} to {deactivated_sat.shape}''')
+        parts = []
+        granularity = get_granularity(len(actions))
+        for i in range(int(len(actions) / granularity)):
+            part = np.array(list(set(np.random.choice(actions, int(len(actions) - i * granularity)))))
+            parts.append(part)
+        parts.append(actions)
+
+        clauses_indices = []
+
+        for part_actions in parts:
+            deactivated_functions = np.argwhere((signed_vf_map_transpose.to_dense()[:, [part_actions - 1]] != 0).squeeze() == False)
+            # print(f'deactivated_functions: {deactivated_functions}, {deactivated_functions.shape}')
+            if len(deactivated_functions.shape) == 1:
+                deactivated_functions = deactivated_functions.unsqueeze(1)
+            # actions_signs = torch.ones(len(part_actions), 1)
+
+            # for i in range(granularity):
+            #     deactivated_indices = np.random.choice(range(shape), min(granularity - i, shape))
+            #     deactivated_functions_temp = torch.mm(deactivated_functions, actions_signs)
+            #     deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0,
+            #                                          np.argwhere(deactivated_functions_temp[deactivated_indices] == 0).squeeze()[0])
+            #     clauses_indices.append(deactivated_indices)
+            #     data_to_cnf(deactivated_sat, temp_dir)
+
+            # deactivated_indices = np.random.choice(range(shape), min(granularity - i, shape))
+            # deactivated_functions_temp = torch.mm(deactivated_functions, actions_signs)
+            deactivated_indices = np.union1d(non_negative_indices.squeeze(1), deactivated_functions[0])
+            if len(deactivated_indices) == 0:
+                continue
+            print(f'''part_actions: {part_actions}, deactivated_indices: {len(deactivated_indices)},
+             negative_indices: {non_negative_indices.shape}''')
+            all_indices = np.ones(clause_logits.shape[0])
+            # all_indices[deactivated_functions[0]] = 0
+            all_indices[deactivated_indices] = 0
+            deactivated_sat = torch.index_select(signed_vf_map_transpose.to_dense(), 0, torch.from_numpy(np.argwhere(all_indices > 0).squeeze(1)))
+            unsat_core = torch.index_select(signed_vf_map_transpose.to_dense(), 0, torch.from_numpy(np.argwhere(all_indices == 0).squeeze(1)))
+
+            clauses_indices.append(np.array(np.unique(deactivated_indices)) + 1)
+            clauses_indices.append(np.array(np.unique(deactivated_indices)) + 1)
+
             data_to_cnf(deactivated_sat, temp_dir)
+            data_to_cnf(unsat_core, temp_dir, True)
+
+        return clauses_indices
 
     def validate(self, train_data, batch_replication = 1):
         predictions = []

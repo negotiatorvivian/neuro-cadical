@@ -188,7 +188,7 @@ def lbdcdl(cnf_dir, cnf, llpath, dump_dir = None, dumpfreq = 50e3, timeout = Non
 
 
 def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dump_dir = None, dumpfreq = 50e3,
-        timeout = None, clause_limit = 1e6):
+             timeout = None, clause_limit = 1e6):
     clause_limit = int(clause_limit)
     fmla = cnf
     counts = np.zeros(fmla.nv)
@@ -203,7 +203,7 @@ def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dum
             for idx, line in enumerate(f):
                 counts[idx] = int(line.split()[1])
 
-    C_idxs, L_idxs, clause_values,  _, _, _ = coo(fmla)
+    C_idxs, L_idxs, clause_values, _, _, _ = coo(fmla)
     n_clauses = len(fmla.clauses)
 
     lbdp = LBDP(dp_id = name, is_train = np.array([is_train], dtype = "bool"),
@@ -215,7 +215,7 @@ def gen_lbdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dum
 
 
 def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), dump_dir = None, dumpfreq = 50e3,
-        timeout = None, clause_limit = 1e6):
+              timeout = None, clause_limit = 1e6):
     clause_limit = int(clause_limit)
     fmla = cnf
     counts = np.zeros(fmla.nv)
@@ -243,15 +243,26 @@ def gen_nmsdp(td, cnf, is_train = True, logger = DummyLogger(verbose = True), du
     return nmsdp
 
 
-def data_to_cnf(data, td):
+def data_to_cnf(data, td, unsat = False):
     clauses = []
     for index in range(data.shape[0]):
         cls = ((np.argwhere(data[index] != 0) + 1) * data[index][np.argwhere(data[index] != 0)]).cpu().numpy().astype(np.int32)[0]
         clauses.append(list(cls))
 
     cnf = CNF(from_clauses = clauses)
-    cnf_path = os.path.join(td.name, str(uuid4()) + ".cnf")
-    cnf.to_file(cnf_path)
+    uid = str(uuid4())[:10]
+    if unsat:
+        # temp_path = os.path.join('/home/ziwei/Workspace/neuro-cadical/data/unsat_core', str(uuid4())[:10] + '-unsatcore' + str(int(time.time())) + ".cnf")
+        # cnf.to_file(temp_path)
+        # print(temp_path)
+        name = uid + '-unsatcore' + str(int(time.time()))
+        cnf_path = os.path.join(td.name, name + ".cnf")
+        cnf.to_file(cnf_path)
+    else:
+        name = uid + str(int(time.time()))
+        cnf_path = os.path.join(td.name, name + ".cnf")
+        cnf.to_file(cnf_path)
+    # print(f'cnf name: {name}')
 
 
 class CNFProcessor:

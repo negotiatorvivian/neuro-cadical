@@ -28,7 +28,7 @@ class DummyWorker:
 
 
 def cadical_fn(cnf_path, refocus = False, query_interval = None, model = None, verbose = False, refocus_scale = 1e7,
-        random_refocus = False, cpu_lim = 500, irrlim = 10e6, seed = None, refocus_init_time = 60, refocus_base = 5000,
+        random_refocus = False, cpu_lim = 200, irrlim = 10e6, seed = None, refocus_init_time = 60, refocus_base = 5000,
         refocus_exp = 1, refocus_ceil = 50000, config = None, gpu = False, refocus_glue_sucks = False,
         refocus_glue_sucks_margin = 20, refocus_reluctant = False, refocus_rebump = False, refocus_restart = True,
         elim_rel_eff = 1000, subsume_rel_eff = 1000, rephase = True, stabilize_only = False, walk = True, **kwargs):

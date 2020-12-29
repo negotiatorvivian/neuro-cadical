@@ -26,3 +26,6 @@ torchscript/
 .vscode/
 *.cnf
 .DS_Store
+python/z3
+python/z3_solver.py
+temp

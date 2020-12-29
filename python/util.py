@@ -33,7 +33,7 @@ def files_with_extension(dir_path, ext = None):
     return dataset_files
 
 
-def recursively_get_files(folder, exts, forbidden = []):
+def recursively_get_files(folder, exts, forbidden = [], sort = False):
     files = []
     for r, d, f in os.walk(folder):
         for x in f:
@@ -42,6 +42,8 @@ def recursively_get_files(folder, exts, forbidden = []):
                     continue
                 else:
                     files.append(os.path.join(r, x))
+    if sort:
+        files.sort(key = lambda y: int(y[-14:-5]))
     return files
 
 
@@ -112,3 +114,17 @@ def get_clauses(G):
         clauses.append(list(c))
     # print(f'G:{clauses}')
     return clauses
+
+
+def get_granularity(length):
+    # if length > 100:
+    #     granularity = 10
+    if length > 50:
+        granularity = 5
+    elif length > 30:
+        granularity = 3
+    elif length > 20:
+        granularity = 2
+    else:
+        granularity = 1
+    return granularity

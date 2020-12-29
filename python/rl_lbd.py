@@ -15,6 +15,7 @@ import ray
 from ray.util import ActorPool
 import random
 import queue
+from z3 import *
 import tempfile
 from uuid import uuid4
 
@@ -89,8 +90,9 @@ def sample_trajectory(agent, env, cnf, is_train):
             # active_variables = np.ones(CL_idxs.n_vars, dtype = int)
             # prediction, _ = agent.predict(data)
             # print(f'prediction: {prediction.size()}, active_variables: {np.sum(active_variables)}')
-            max_length = int(CL_idxs.n_vars / 20) + 10
-            min_length = int(CL_idxs.n_vars / 20) - 10
+            unit = 20 if cnf.is_sat else 10
+            max_length = int(CL_idxs.n_vars / unit) + 10
+            min_length = max(int(CL_idxs.n_vars / unit) - 10, 3)
             G = mk_G(CL_idxs)
             mu_logits, value_estimate = agent.act(G)
             sample_length = random.randint(min_length, max_length)
@@ -218,14 +220,22 @@ class EpisodeWorker:  # buf is a handle to a ReplayBuffer object
 
     def set_env(self, from_cnf = None, from_file = None):
         paths = from_file.split('/')
-        from_cnf = os.path.join('/'.join(paths[:-1]) + '-answers', paths[-1])
+        if paths[-2] == 'SAT' or paths[-2] == 'UNSAT':
+            path = paths[:-2]
+        else:
+            path = paths[:-1]
+
+        from_cnf = os.path.join('/'.join(path) + '-answers', paths[-1])
         if from_cnf is not None:
             # self.td = tempfile.TemporaryDirectory()
             # cnf_path = os.path.join(self.td.name, str(uuid4()) + ".cnf")
             # from_cnf.to_file(cnf_path)
             try:
                 # self.env = SatEnv(cnf_path)
-                self.cnf = CNF(from_file = from_cnf, id = paths[-1])
+                if os.path.exists(from_cnf):
+                    self.cnf = CNF(from_file = from_cnf, id = paths[-1])
+                else:
+                    self.cnf = CNF(from_file = from_file, id = paths[-1])
             except RuntimeError as e:
                 print("BAD CNF:", from_cnf)
                 raise e
@@ -435,29 +445,33 @@ def predict_batch(model, G, batch_size, graphsage, nodes, labels, actions, cnfs,
         agg_loss = None
         if graphsage is not None:
             agg_loss = graphsage.loss(nodes, labels)
-        tempdir = model.predict(G, actions, data)
+        tempdir, actionss = model.predict(G, actions, data)
         # logger.write_log(f'cnf: {cnfs[0].id}, actions: {actions}')
         # print(f'cnf: {cnfs[0].id}, length: {len(cnfs)}, actions: {actions}')
-        validate_answers(tempdir, names, logger)
+        validate_answers(tempdir, actionss, names, logger)
 
     return None
 
 
-def validate_answers(tds, names, logger):
-    for td in tds:
-        files = recursively_get_files(td.name, ['cnf'])
+def validate_answers(tds, actionss, names, logger):
+    for i, td in enumerate(tds):
+        files = recursively_get_files(td.name, ['cnf'], sort = True)
+        if len(files) == 0:
+            continue
         print(f'files: {files}')
         time = 0
         results = []
-        for file in files:
+
+        for j, file in enumerate(files):
             res = cadical_fn(file, gpu = True)
-            time += res['cpu_time']
+            logger.write_log(f'{file}: {res["result"]}; {len(actionss[i][j])}; actions: {list(actionss[i][j])}')
+            time = res['cpu_time']
             results.append(res["result"])
             if res["result"]:
                 break
         result = True in results
-        logger.write_log(f';;name: {names[0]}; time: {time/len(files)}; result: {result};')
-        print(f'name: {names}, time: {time/len(files)}')
+        logger.write_log(f';;name: {names[0]}; time: {time}; result: {result}')
+        print(f'name: {names}, time: {time}')
 
 
 def predict_step(model, batcher, G, batch_size, graphsage, nodes, labels, device = torch.device("cpu")):
@@ -747,8 +761,9 @@ def _parse_main(is_train):
         opts.root_dir = os.path.join(opts.root_dir, 'dtrain')
     else:
         opts.root_dir = os.path.join(opts.root_dir, 'dpredict')
+    data_dir = '-' + opts.cnfs.split('/')[-1]
 
-    opts.root_dir = os.path.join(opts.root_dir, time.strftime("%Y%m%d-%H%M", time.localtime()))
+    opts.root_dir = os.path.join(opts.root_dir, time.strftime("%Y%m%d-%H%M" + data_dir, time.localtime()))
     opts.ckpt_dir = os.path.join(opts.root_dir, 'weights')
     opts.log_dir = os.path.join(opts.root_dir, 'logs')
 
@@ -792,7 +807,7 @@ def _main(is_train = True):
         encode_dim = opts.encode_dim, feature_dim = opts.feature_dim, num_samples = opts.num_samples, buf = buf,
         weight_manager = weight_manager, batch_size = opts.batch_size, log_dir = opts.log_dir,
         ckpt_freq = opts.ckpt_freq, ckpt_dir = opts.ckpt_dir, lr = opts.lr, sp_config = opts.sp_config,
-        restore = not is_train, model_cfg = model_cfg)
+        restore = is_train, model_cfg = model_cfg)
     # TODO: to avoid oom, either dynamically batch or preprocess the formulas beforehand to ensure that they
     # TODO:  are under a certain size -- this will requre some changes throughout to avoid a fixed batch size
     workers = [ray.remote(EpisodeWorker).remote(buf = buf, weight_manager = weight_manager, logdir = opts.log_dir,
